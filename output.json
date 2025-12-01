@@ -1,0 +1,78 @@
+
+{
+  "company": "Snijders Natuursteen Almere B.V.",
+  "rectification_date": "17-11-2025",
+  "order": {
+    "date": "06-11-25",
+    "number": "11-074"
+  },
+  "factory": "RCGG",
+  "client": "de Verbinding",
+  "delivery_time": "4 weeks maximum",
+  "materials": [
+    {
+      "pcs": 2,
+      "item": "headstones",
+      "material": "indian aurora",
+      "length": 55,
+      "width": 100,
+      "thickness": 80,
+      "m3": 0.092
+    },
+    {
+      "pcs": 1,
+      "item": "base",
+      "material": "indian aurora",
+      "length": 130,
+      "width": 25,
+      "thickness": 100,
+      "m3": 0.033
+    },
+    {
+      "pcs": 2,
+      "item": "side kerbs",
+      "material": "indian aurora",
+      "length": 220,
+      "width": 15,
+      "thickness": 80,
+      "m3": 0.053
+    },
+    {
+      "pcs": 1,
+      "item": "front kerb",
+      "material": "indian aurora",
+      "length": 130,
+      "width": 15,
+      "thickness": 80,
+      "m3": 0.016
+    },
+    {
+      "pcs": 1,
+      "item": "garden kerb",
+      "material": "indian aurora",
+      "length": 100,
+      "width": 63.3,
+      "thickness": -10,
+      "m3": 0.051
+    },
+    {
+      "pcs": 1,
+      "item": "bowed heart",
+      "material": "viscount white",
+      "length": 30,
+      "width": 28,
+      "thickness": 100,
+      "m3": 0.008,
+      "description": "front bowed"
+    }
+  ],
+  "finish": "polished, heart bowed on the frontside, sides and backside flat.",
+  "dowel_holes": "in the heart and headstones as mentioned.",
+  "costs": {
+    "material": 739,
+    "extra_fee": 60,
+    "kgs": 657,
+    "m3": 0.253,
+    "total": 799
+  }
+}
