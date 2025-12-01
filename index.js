@@ -1,51 +1,100 @@
-require('dotenv').config();
-const fs = require('fs');
+const  express = require("express");
+const multer =require("multer");
+const dotenv = require("dotenv");
+const fs = require("fs");
 const pdfParse = require('pdf-parse');
-const OpenAI = require('openai');
+const path = require("path");
+const OpenAI =  require("openai");
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+dotenv.config();
+const app = express();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function pdfToJson(pdfPath) {
-  try {
-    const dataBuffer = fs.readFileSync(pdfPath);
-    const pdfData = await pdfParse(dataBuffer); 
-    const text = pdfData.text;
+const upload = multer({ dest: "uploads/" });
 
- 
-    const chunkSize = 3000; 
-    const chunks = [];
-    for (let i = 0; i < text.length; i += chunkSize) {
-      chunks.push(text.slice(i, i + chunkSize));
-    }
+async function extractJsonFromPDF(text) {
+  const prompt = `
+  Convert the following PDF content into structured JSON. Only output valid JSON.
+  PDF Content:
+  ${text}
+  `;
 
-    const allJson = [];
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+  });
 
-    for (let i = 0; i < chunks.length; i++) {
-      const prompt = `
-        Convert the following text to structured JSON and only provide the json don't give any unwanted text in json like here your json :
-        "${chunks[i]}"
-      `;
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0
-      });
-
-      allJson.push(response.choices[0].message.content);
-      console.log(`Processed chunk ${i + 1}/${chunks.length}`);
-    }
-
-    const finalJson = `[${allJson.join(",\n")}]`;
-    fs.writeFileSync("output.json", finalJson);
-    console.log("Saved JSON to output.json");
-  } catch (err) {
-    console.error("Error converting PDF to JSON:", err);
-  }
+  return completion.choices[0].message.content;
 }
 
-pdfToJson(process.env.PDF_PATH);
+app.post("/upload", upload.single("pdf"), async (req, res) => {
+  try {
+    const pdfBuffer = fs.readFileSync(req.file.path);
+    const pdfData = await pdfParse(pdfBuffer);
+
+    const jsonOutput = await extractJsonFromPDF(pdfData.text);
+
+    res.json({
+      success: true,
+      data: JSON.parse(jsonOutput),
+    });
+  } catch (error) {
+    console.error(" Error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.listen(5000, () => console.log("Server running on http://localhost:5000"));
+
+
+// require('dotenv').config();
+// const fs = require('fs');
+// const pdfParse = require('pdf-parse');
+// const OpenAI = require('openai');
+
+// const openai = new OpenAI({
+//   apiKey: process.env.OPENAI_API_KEY
+// });
+
+// async function pdfToJson(pdfPath) {
+//   try {
+//     const dataBuffer = fs.readFileSync(pdfPath);
+//     const pdfData = await pdfParse(dataBuffer); 
+//     const text = pdfData.text;
+
+ 
+//     const chunkSize = 3000; 
+//     const chunks = [];
+//     for (let i = 0; i < text.length; i += chunkSize) {
+//       chunks.push(text.slice(i, i + chunkSize));
+//     }
+
+//     const allJson = [];
+
+//     for (let i = 0; i < chunks.length; i++) {
+//       const prompt = `
+//         Convert the following text to structured JSON and only provide the json don't give any unwanted text in json like here your json :
+//         "${chunks[i]}"
+//       `;
+//       const response = await openai.chat.completions.create({
+//         model: "gpt-4o-mini",
+//         messages: [{ role: "user", content: prompt }],
+//         temperature: 0
+//       });
+
+//       allJson.push(response.choices[0].message.content);
+//       console.log(`Processed chunk ${i + 1}/${chunks.length}`);
+//     }
+
+//     const finalJson = `[${allJson.join(",\n")}]`;
+//     fs.writeFileSync("output.json", finalJson);
+//     console.log("Saved JSON to output.json");
+//   } catch (err) {
+//     console.error("Error converting PDF to JSON:", err);
+//   }
+// }
+
+// pdfToJson(process.env.PDF_PATH);
 
 // const express = require("express");
 // const app = express();
