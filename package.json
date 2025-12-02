@@ -19,6 +19,7 @@
     "openai": "^6.9.1",
     "pdf-parse": "^1.1.4",
     "pdf2json": "^4.0.0",
-    "pdfjs-dist": "^5.4.449"
+    "pdfjs-dist": "^5.4.449",
+    "xslx": "^1.0.0"
   }
 }
