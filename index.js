@@ -159,7 +159,7 @@ app.post("/upload", upload.single("pdf"), async (req, res) => {
     }
 });
 
-app.post("/excel", (req, res) => {
+app.get("/excel", (req, res) => {
     if (!dataJSON) return res.status(400).json({ success: false, error: "No JSON data found. Please run the /upload endpoint first." });
 
     try {
