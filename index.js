@@ -16,7 +16,7 @@ const app = express();
 const upload = multer({ dest: "uploads/" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.use(cors({
-  origin: "http://localhost:5173",
+  origin: "https://convert-pdf-to-excel-frontend-plfz.vercel.app",
   credentials: true,
   methods: ["GET", "POST"]
 }));
