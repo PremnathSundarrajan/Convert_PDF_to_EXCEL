@@ -153,14 +153,28 @@ function unwindAndFlatten(record, arrayKey = 'material_details') {
 }
 async function extractJsonFromPDF(text) {
     const system = "You are a strict JSON-only assistant. Return only valid JSON (object or array). No markdown, no backticks, no extra text.";
-    const prompt = `
-Convert the following PDF content into a clean JSON structure suitable for tabular conversion.
+    const prompt = `Your task is to extract structured information from PDF text and convert it into clean JSON.
+
 Rules:
-- Return ONLY valid JSON (object or array of objects).
-- The list of material pieces should be in an array named 'material_details'.
-PDF content:
+- Output ONLY valid JSON.
+- Detect important fields dynamically based on the content.
+- Group repeated or tabular information into an array called "material_details" (if applicable).
+- If no tabular material exists, return a general JSON structure based on identified key-value data.
+- Remove page numbers, watermarks, headers, footers, and irrelevant formatting.
+- Preserve original numbers, names, dates, and item descriptions accurately.
+
+PDF Content:
 ${text}
-`;
+
+`
+    //     const prompt = `
+// Convert the following PDF content into a clean JSON structure suitable for tabular conversion.
+// Rules:
+// - Return ONLY valid JSON (object or array of objects).
+// - The list of material pieces should be in an array named 'material_details'.
+// PDF content:
+// ${text}
+// `;
 
     const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -275,41 +289,25 @@ app.get("/excel", (req, res) => {
 
     try {
         const workbook = XLSX.utils.book_new();
-        let allUnwoundRows = []; 
 
         const pdfDataArray = Array.isArray(dataJSON) ? dataJSON : [dataJSON];
 
         pdfDataArray.forEach((fileData, fileIndex) => {
-           
             const unwoundRecords = unwindAndFlatten(fileData, 'material_details');
-            
-            unwoundRecords.forEach(record => {
-         
-                record.order_number = record.order_number || `Order_${fileIndex + 1}`;
-                allUnwoundRows.push(record);
-            });
+
+            if (unwoundRecords.length === 0) return;
+
+            const ws = XLSX.utils.json_to_sheet(unwoundRecords);
+
+            const headers = Object.keys(unwoundRecords[0]) || [];
+            const cols = headers.map(k => ({
+                wch: Math.min(Math.max(k.length, 15), 40)
+            }));
+            ws['!cols'] = cols;
+
+            const sheetName = `File_${fileIndex + 1}`;
+            XLSX.utils.book_append_sheet(workbook, ws, sheetName);
         });
-
-        if (allUnwoundRows.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: "Successfully extracted JSON, but no tabular data found after processing."
-            });
-        }
-        
-       
-        const ws = XLSX.utils.json_to_sheet(allUnwoundRows);
-
-
-        const headers = allUnwoundRows.length > 0 ? Object.keys(allUnwoundRows[0]) : [];
-        const cols = headers.map(k => ({
-            wch: Math.min(Math.max(k.length, 15), 40)
-        }));
-        ws['!cols'] = cols;
-
-
-        XLSX.utils.book_append_sheet(workbook, ws, "Combined_Data");
-
 
         const outputFilename = `converted_${Date.now()}.xlsx`;
         const outputPath = path.join(__dirname, outputFilename);
@@ -325,7 +323,7 @@ app.get("/excel", (req, res) => {
             }
         });
 
-        dataJSON = null; 
+        dataJSON = null;
 
     } catch (error) {
         console.error("Excel Conversion Error:", error);
@@ -336,6 +334,79 @@ app.get("/excel", (req, res) => {
         });
     }
 });
+
+
+// app.get("/excel", (req, res) => {
+//     if (!dataJSON || dataJSON.length === 0) {
+//         return res.status(400).json({
+//             success: false,
+//             error: "No JSON found. Upload PDFs first."
+//         });
+//     }
+
+//     try {
+//         const workbook = XLSX.utils.book_new();
+//         let allUnwoundRows = []; 
+
+//         const pdfDataArray = Array.isArray(dataJSON) ? dataJSON : [dataJSON];
+
+//         pdfDataArray.forEach((fileData, fileIndex) => {
+           
+//             const unwoundRecords = unwindAndFlatten(fileData, 'material_details');
+            
+//             unwoundRecords.forEach(record => {
+         
+//                 record.order_number = record.order_number || `Order_${fileIndex + 1}`;
+//                 allUnwoundRows.push(record);
+//             });
+//         });
+
+//         if (allUnwoundRows.length === 0) {
+//             return res.status(400).json({
+//                 success: false,
+//                 error: "Successfully extracted JSON, but no tabular data found after processing."
+//             });
+//         }
+        
+       
+//         const ws = XLSX.utils.json_to_sheet(allUnwoundRows);
+
+
+//         const headers = allUnwoundRows.length > 0 ? Object.keys(allUnwoundRows[0]) : [];
+//         const cols = headers.map(k => ({
+//             wch: Math.min(Math.max(k.length, 15), 40)
+//         }));
+//         ws['!cols'] = cols;
+
+
+//         XLSX.utils.book_append_sheet(workbook, ws, "Combined_Data");
+
+
+//         const outputFilename = `converted_${Date.now()}.xlsx`;
+//         const outputPath = path.join(__dirname, outputFilename);
+
+//         XLSX.writeFile(workbook, outputPath);
+
+//         res.download(outputPath, outputFilename, (err) => {
+//             if (err) console.error("Download error:", err);
+//             try {
+//                 fs.unlinkSync(outputPath);
+//             } catch (cleanupErr) {
+//                 console.error("Cleanup error:", cleanupErr);
+//             }
+//         });
+
+//         dataJSON = null; 
+
+//     } catch (error) {
+//         console.error("Excel Conversion Error:", error);
+//         res.status(500).json({
+//             success: false,
+//             error: "Excel creation failed",
+//             details: error.message
+//         });
+//     }
+// });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
