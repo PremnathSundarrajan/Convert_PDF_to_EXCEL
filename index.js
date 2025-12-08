@@ -7,13 +7,19 @@ const pdfParse = require("pdf-parse");
 const path = require("path");
 const OpenAI = require("openai");
 const XLSX = require('xlsx');
+const cors = require("cors");
+
 
 dotenv.config();
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
+app.use(cors({
+  origin: "http://localhost:5173",
+  credentials: true,
+  methods: ["GET", "POST"]
+}));
 
 let dataJSON = null;
 
@@ -174,6 +180,7 @@ ${text}
 app.post("/upload", upload.array("pdfs"), async (req, res) => {
     try {
         // Check for multiple files
+        console.log("file recieved successfully");
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ success: false, error: "No files uploaded" });
         }
