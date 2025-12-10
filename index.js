@@ -153,20 +153,55 @@ function unwindAndFlatten(record, arrayKey = 'material_details') {
 }
 async function extractJsonFromPDF(text) {
     const system = "You are a strict JSON-only assistant. Return only valid JSON (object or array). No markdown, no backticks, no extra text.";
-    const prompt = `Your task is to extract structured information from PDF text and convert it into clean JSON.
+   const prompt = `
+Convert the following PDF text into a STRICT JSON object using these exact fixed column names:
+
+MAIN TABLE (array of rows under "material_details"):
+[
+  {
+    "pcs": number,
+    "item": string,
+    "material": string,
+    "length": number|string,
+    "width": number|string,
+    "thick": number|string,
+    "m3": number|string,
+    "notes": string|null
+  }
+]
+
+You MUST extract the material rows into the "material_details" array.
+
 
 Rules:
 - Output ONLY valid JSON.
-- Detect important fields dynamically based on the content.
-- Group repeated or tabular information into an array called "material_details" (if applicable).
-- If no tabular material exists, return a general JSON structure based on identified key-value data.
-- Remove page numbers, watermarks, headers, footers, and irrelevant formatting.
-- Preserve original numbers, names, dates, and item descriptions accurately.
+- Always include "material_details" as an array.
+- Fill missing numbers as null.
+- Keep names, descriptions, sizes exact.
+- If extra text follows a row (e.g. “front bowed”), store it in "notes".
+- Do NOT change column names.
 
-PDF Content:
+PDF content:
 ${text}
+`;
 
-`
+//
+// Also extract the following header fields (if present):
+
+// - "date"
+// - "order"
+// - "factory"
+// - "client"
+// - "delivery"
+// - "finish"
+// - "material_cost"
+// - "extra_fee"
+// - "kgs"
+// - "total"
+
+
+
+
     //     const prompt = `
 // Convert the following PDF content into a clean JSON structure suitable for tabular conversion.
 // Rules:
