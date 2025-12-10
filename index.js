@@ -204,7 +204,7 @@ app.post("/convert", upload.array("pdfs"), async (req, res) => {
           const pdfBuffer = fs.readFileSync(file.path);
           const pdfData = await pdfParse(pdfBuffer);
 
-          // Extract JSON via AI
+          
           let rawJson = await extractJsonFromPDF(pdfData.text);
           rawJson = sanitizeAIResponse(rawJson);
 
@@ -232,7 +232,7 @@ app.post("/convert", upload.array("pdfs"), async (req, res) => {
       })
     );
 
-    // Filter valid JSONs
+  
     results.forEach((r) => {
       if (r && r.success === false) return;
       allValidJson.push(r);
@@ -246,30 +246,27 @@ app.post("/convert", upload.array("pdfs"), async (req, res) => {
       });
     }
 
-    /* ---------------------------------------------------
-       📌 CREATE EXCEL WORKBOOK (EACH PDF → ONE SHEET)
-    ----------------------------------------------------*/
+  
     const workbook = XLSX.utils.book_new();
 
     allValidJson.forEach((fileData, index) => {
       let finalRows = [];
 
-      // CASE 1: file has material_details → unwind normally
+  
       if (fileData.material_details && Array.isArray(fileData.material_details)) {
         finalRows = unwindAndFlatten(fileData);
       }
 
-      // CASE 2: file has "rows" array → flatten table rows
+     
       else if (fileData.rows && Array.isArray(fileData.rows)) {
         finalRows = flattenObject(fileData.rows);
       }
 
-      // CASE 3: file has "years" array → flatten multiple year blocks
       else if (fileData.years && Array.isArray(fileData.years)) {
         finalRows = flattenObject(fileData);
       }
 
-      // CASE 4: ANY OTHER JSON → fallback to full flatten
+     
       else {
         finalRows = [flattenObject(fileData)];
       }
@@ -290,9 +287,7 @@ app.post("/convert", upload.array("pdfs"), async (req, res) => {
       XLSX.utils.book_append_sheet(workbook, ws, `PDF_${index + 1}`);
     });
 
-    /* ---------------------------------------------------
-       📌 WRITE & SEND EXCEL FILE
-    ----------------------------------------------------*/
+   
     const outputFile = `converted_${Date.now()}.xlsx`;
     const outputPath = path.join(__dirname, outputFile);
 
@@ -313,224 +308,6 @@ app.post("/convert", upload.array("pdfs"), async (req, res) => {
 
 
 
-// app.post("/upload", upload.array("pdfs"), async (req, res) => {
-//     try {
-//         // Check for multiple files
-//         console.log("file recieved successfully");
-//         if (!req.files || req.files.length === 0) {
-//             return res.status(400).json({ success: false, error: "No files uploaded" });
-//         }
-
-//         const allExtractedData = []; 
-
-        
-//         const results = await Promise.all(req.files.map(async (file) => {
-//             const pdfBuffer = fs.readFileSync(file.path);
-//             const pdfData = await pdfParse(pdfBuffer);
-
-//             let rawJson = await extractJsonFromPDF(pdfData.text);
-//             rawJson = sanitizeAIResponse(rawJson);
-
-//             let cleanedJson = rawJson;
-//             let currentDataJSON = null;
-//             let success = true;
-//             let errorMsg = null;
-
-//             try {
-//                 currentDataJSON = JSON.parse(cleanedJson);
-//             } catch {
-//                 cleanedJson = tryFixJson(cleanedJson);
-//                 try {
-//                     currentDataJSON = JSON.parse(cleanedJson);
-//                 } catch (err) {
-//                     success = false;
-//                     errorMsg = "Could not repair JSON";
-//                 }
-//             }
-            
-           
-//             if (fs.existsSync(file.path)) {
-//                 fs.unlinkSync(file.path);
-//             }
-
-           
-//             if (success && currentDataJSON) {
-//                 return currentDataJSON;
-//             } else {
-                
-//                 return { 
-//                     file: file.originalname, 
-//                     success: false, 
-//                     error: errorMsg,
-//                     aiRaw: rawJson, 
-//                     cleaned: cleanedJson 
-//                 };
-//             }
-//         }));
-
-      
-//         dataJSON = results.filter(r => r.success !== false);
-//         const errors = results.filter(r => r.success === false);
-
-//         if (dataJSON.length === 0) {
-//             return res.status(500).json({
-//                 success: false,
-//                 error: "Failed to extract valid JSON from any uploaded file.",
-//                 errors: errors
-//             });
-//         }
-
-//         return res.json({
-//             success: true,
-//             message: `JSON extracted and repaired successfully for ${dataJSON.length} out of ${req.files.length} files.`,
-//             dataPreview: dataJSON.slice(0, 3), // Show a preview of the first 3
-//             errors: errors // Report any files that failed
-//         });
-
-//     } catch (error) {
-        
-//         if (req.files) {
-//             req.files.forEach(file => {
-//                 if (fs.existsSync(file.path)) {
-//                     fs.unlinkSync(file.path);
-//                 }
-//             });
-//         }
-//         console.error("Upload error:", error);
-//         return res.status(500).json({ success: false, error: error.message });
-//     }
-// });
-
-
-
-// app.get("/excel", (req, res) => {
-//     if (!dataJSON || dataJSON.length === 0) {
-//         return res.status(400).json({
-//             success: false,
-//             error: "No JSON found. Upload PDFs first."
-//         });
-//     }
-
-//     try {
-//         const workbook = XLSX.utils.book_new();
-
-//         const pdfDataArray = Array.isArray(dataJSON) ? dataJSON : [dataJSON];
-
-//         pdfDataArray.forEach((fileData, fileIndex) => {
-//             const unwoundRecords = unwindAndFlatten(fileData, 'material_details');
-
-//             if (unwoundRecords.length === 0) return;
-
-//             const ws = XLSX.utils.json_to_sheet(unwoundRecords);
-
-//             const headers = Object.keys(unwoundRecords[0]) || [];
-//             const cols = headers.map(k => ({
-//                 wch: Math.min(Math.max(k.length, 15), 40)
-//             }));
-//             ws['!cols'] = cols;
-
-//             const sheetName = `File_${fileIndex + 1}`;
-//             XLSX.utils.book_append_sheet(workbook, ws, sheetName);
-//         });
-
-//         const outputFilename = `converted_${Date.now()}.xlsx`;
-//         const outputPath = path.join(__dirname, outputFilename);
-
-//         XLSX.writeFile(workbook, outputPath);
-
-//         res.download(outputPath, outputFilename, (err) => {
-//             if (err) console.error("Download error:", err);
-//             try {
-//                 fs.unlinkSync(outputPath);
-//             } catch (cleanupErr) {
-//                 console.error("Cleanup error:", cleanupErr);
-//             }
-//         });
-
-//         dataJSON = null;
-
-//     } catch (error) {
-//         console.error("Excel Conversion Error:", error);
-//         res.status(500).json({
-//             success: false,
-//             error: "Excel creation failed",
-//             details: error.message
-//         });
-//     }
-// });
-
-
-// app.get("/excel", (req, res) => {
-//     if (!dataJSON || dataJSON.length === 0) {
-//         return res.status(400).json({
-//             success: false,
-//             error: "No JSON found. Upload PDFs first."
-//         });
-//     }
-
-//     try {
-//         const workbook = XLSX.utils.book_new();
-//         let allUnwoundRows = []; 
-
-//         const pdfDataArray = Array.isArray(dataJSON) ? dataJSON : [dataJSON];
-
-//         pdfDataArray.forEach((fileData, fileIndex) => {
-           
-//             const unwoundRecords = unwindAndFlatten(fileData, 'material_details');
-            
-//             unwoundRecords.forEach(record => {
-         
-//                 record.order_number = record.order_number || `Order_${fileIndex + 1}`;
-//                 allUnwoundRows.push(record);
-//             });
-//         });
-
-//         if (allUnwoundRows.length === 0) {
-//             return res.status(400).json({
-//                 success: false,
-//                 error: "Successfully extracted JSON, but no tabular data found after processing."
-//             });
-//         }
-        
-       
-//         const ws = XLSX.utils.json_to_sheet(allUnwoundRows);
-
-
-//         const headers = allUnwoundRows.length > 0 ? Object.keys(allUnwoundRows[0]) : [];
-//         const cols = headers.map(k => ({
-//             wch: Math.min(Math.max(k.length, 15), 40)
-//         }));
-//         ws['!cols'] = cols;
-
-
-//         XLSX.utils.book_append_sheet(workbook, ws, "Combined_Data");
-
-
-//         const outputFilename = `converted_${Date.now()}.xlsx`;
-//         const outputPath = path.join(__dirname, outputFilename);
-
-//         XLSX.writeFile(workbook, outputPath);
-
-//         res.download(outputPath, outputFilename, (err) => {
-//             if (err) console.error("Download error:", err);
-//             try {
-//                 fs.unlinkSync(outputPath);
-//             } catch (cleanupErr) {
-//                 console.error("Cleanup error:", cleanupErr);
-//             }
-//         });
-
-//         dataJSON = null; 
-
-//     } catch (error) {
-//         console.error("Excel Conversion Error:", error);
-//         res.status(500).json({
-//             success: false,
-//             error: "Excel creation failed",
-//             details: error.message
-//         });
-//     }
-// });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
