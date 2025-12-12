@@ -23,7 +23,7 @@ const unwindAndFlatten = require("./utils/unwindAndFlatten");
 const convert = require("./controller/convert");
 app.use(
   cors({
-    origin: "https://convert-pdf-to-excel-frontend-plfz.vercel.app",
+    origin: "https://pdf-excel-blond.vercel.app",
     credentials: true,
     methods: ["GET", "POST"],
   })
