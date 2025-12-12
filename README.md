@@ -61,7 +61,6 @@ The server will start on `http://localhost:3000` (or the port specified in your 
    - `material` (material type)
    - `length`, `width`, `thick` (dimensions)
    - `m3` (cubic meters)
-   - `notes` (additional information)
 4. **Data Sanitization**: Cleans and validates the JSON response
 5. **Excel Generation**: Converts the structured data into an Excel workbook
 6. **Auto Download**: The Excel file automatically downloads to your device
