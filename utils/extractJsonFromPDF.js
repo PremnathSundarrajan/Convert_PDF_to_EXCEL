@@ -22,7 +22,7 @@ MAIN TABLE (array of rows under "material_details"):
     "m3": number|string
   }
 ]
-
+Don't include notes column
 You MUST extract the material rows into the "material_details" array.
 
 
