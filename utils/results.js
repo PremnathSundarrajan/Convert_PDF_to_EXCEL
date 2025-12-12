@@ -1,19 +1,16 @@
  
 const extractJsonFromPDF = require("./extractJsonFromPDF");
-const flattenObject = require("./flattenObject");
+
 const sanitizeAIResponse = require("./sanitizeAIResponse");
 const tryFixJson = require("./tryFixJson");
-const unwindAndFlatten = require("./unwindAndFlatten");
 
-const multer = require("multer");
+
 const fs = require("fs");
 const pdfParse = require("pdf-parse");
-const path = require("path");
 const OpenAI = require("openai");
-const XLSX = require("xlsx");
 const dotenv = require("dotenv");
 dotenv.config();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const resultsFunc = async(req)=>{
     return await Promise.all(
           req.files.map(async (file) => {

@@ -1,9 +1,5 @@
-const multer = require("multer");
-const fs = require("fs");
-const pdfParse = require("pdf-parse");
-const path = require("path");
+
 const OpenAI = require("openai");
-const XLSX = require("xlsx");
 const dotenv = require("dotenv");
 const sanitizeAIResponse = require("./sanitizeAIResponse");
 dotenv.config();

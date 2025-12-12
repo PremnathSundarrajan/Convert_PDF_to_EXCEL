@@ -1,13 +1,9 @@
-const multer = require("multer");
-const fs = require("fs");
-const pdfParse = require("pdf-parse");
-const path = require("path");
-const OpenAI = require("openai");
-const XLSX = require("xlsx");
+
+
 const dotenv = require("dotenv");
 const flattenObject = require("./flattenObject");
 dotenv.config();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 function unwindAndFlatten(record, arrayKey = "material_details") {
   const records = [];
   const arrayToUnwind = record[arrayKey] || [];

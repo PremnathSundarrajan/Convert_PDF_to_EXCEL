@@ -1,20 +1,15 @@
  
-const extractJsonFromPDF = require("../utils/extractJsonFromPDF");
+
 const flattenObject = require("../utils/flattenObject");
-const sanitizeAIResponse = require("../utils/sanitizeAIResponse");
-const tryFixJson = require("../utils/tryFixJson");
 const unwindAndFlatten = require("../utils/unwindAndFlatten");
 const resultsFunc  = require("../utils/results");
-
-const multer = require("multer");
 const fs = require("fs");
-const pdfParse = require("pdf-parse");
 const path = require("path");
 const OpenAI = require("openai");
 const XLSX = require("xlsx");
 const dotenv = require("dotenv");
 dotenv.config();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const convert = async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -34,7 +29,7 @@ const convert = async (req, res) => {
       });
     }
 
-    // 🔥 COLLECT ALL ROWS FROM ALL PDFs INTO ONE ARRAY
+  
     let combinedRows = [];
 
     allValidJson.forEach((fileData) => {
@@ -54,15 +49,15 @@ const convert = async (req, res) => {
         finalRows = [flattenObject(fileData)];
       }
 
-      // 🔥 Append this PDF's rows to global combined array
+      
       combinedRows = combinedRows.concat(finalRows);
     });
 
-    // --- Create ONE sheet ---
+
     const workbook = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(combinedRows);
 
-    // Autofit columns
+ 
     const headers = Object.keys(combinedRows[0]);
     ws["!cols"] = headers.map((key) => ({
       wch: Math.max(key.length, 15),
