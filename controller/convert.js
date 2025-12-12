@@ -1,8 +1,6 @@
- 
-
 const flattenObject = require("../utils/flattenObject");
 const unwindAndFlatten = require("../utils/unwindAndFlatten");
-const resultsFunc  = require("../utils/results");
+const resultsFunc = require("../utils/results");
 const fs = require("fs");
 const path = require("path");
 const OpenAI = require("openai");
@@ -29,13 +27,15 @@ const convert = async (req, res) => {
       });
     }
 
-  
     let combinedRows = [];
 
-    allValidJson.forEach((fileData) => {
+    allValidJson.forEach((fileData, index) => {
       let finalRows = [];
 
-      if (fileData.material_details && Array.isArray(fileData.material_details)) {
+      if (
+        fileData.material_details &&
+        Array.isArray(fileData.material_details)
+      ) {
         finalRows = unwindAndFlatten(fileData);
       } else if (fileData.rows && Array.isArray(fileData.rows)) {
         finalRows = flattenObject(fileData.rows);
@@ -49,15 +49,18 @@ const convert = async (req, res) => {
         finalRows = [flattenObject(fileData)];
       }
 
-      
+      // Add the rows from this PDF
       combinedRows = combinedRows.concat(finalRows);
-    });
 
+      // Add a blank row after each PDF file (except the last one)
+      if (index < allValidJson.length - 1) {
+        combinedRows.push({}); // Empty object creates a blank row
+      }
+    });
 
     const workbook = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(combinedRows);
 
- 
     const headers = Object.keys(combinedRows[0]);
     ws["!cols"] = headers.map((key) => ({
       wch: Math.max(key.length, 15),
@@ -75,7 +78,6 @@ const convert = async (req, res) => {
         fs.unlinkSync(outputPath);
       } catch {}
     });
-
   } catch (error) {
     res.status(500).json({
       success: false,
