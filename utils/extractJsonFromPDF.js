@@ -19,8 +19,7 @@ MAIN TABLE (array of rows under "material_details"):
     "length": number|string,
     "width": number|string,
     "thick": number|string,
-    "m3": number|string,
-    "notes": string|null
+    "m3": number|string
   }
 ]
 
