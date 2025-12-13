@@ -68,11 +68,11 @@ const convert = async (req, res) => {
       let maxAllowed = 40; // Default max width
 
       if (header.toLowerCase() === "material") {
-        maxAllowed = 50; // Material can be longer
+        maxAllowed = 60; // Material can be longer (increased from 50)
       } else if (header.toLowerCase() === "item") {
-        maxAllowed = 45; // Item can also be longer
+        maxAllowed = 55; // Item can also be longer (increased from 45)
       } else if (header.toLowerCase() === "notes") {
-        maxAllowed = 50; // Notes can be long
+        maxAllowed = 55; // Notes can be long
       }
 
       // Ensure minimum width of 12 and apply the appropriate maximum
@@ -111,7 +111,7 @@ const convert = async (req, res) => {
     res.download(outputPath, outputFile, () => {
       try {
         fs.unlinkSync(outputPath);
-      } catch { }
+      } catch {}
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

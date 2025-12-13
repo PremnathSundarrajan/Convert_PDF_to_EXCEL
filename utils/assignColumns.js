@@ -1,6 +1,7 @@
 // Helper validators based on user rules
 const isM3 = (t) => /^\d+,?\d*$/.test(t) || /^0,\d{3}$/.test(t);
-const isThick = (t) => (/^\d{1,2}$/.test(t) || /^\d{1,2}-\d{1,2}$/.test(t)) && parseInt(t) > 0; // Bans "0", allows "10-8"
+const isThick = (t) =>
+  (/^\d{1,2}$/.test(t) || /^\d{1,2}-\d{1,2}$/.test(t)) && parseInt(t) > 0; // Bans "0", allows "10-8"
 const isDim = (t) => /^\d{1,3}(,\d+)?$/.test(t) || /^[0-9,]+-[0-9,]+$/.test(t); // Allow decimals "62,5" & ranges
 const hasLetters = (t) => /[a-zA-Z]/.test(t);
 
@@ -24,7 +25,7 @@ function assignColumns(tokens) {
   }
 
   // 0b. Remove standalone placeholder zeros
-  tokens = tokens.filter(t => t !== "0");
+  tokens = tokens.filter((t) => t !== "0");
 
   // 1. Identify Anchor: m3
   let m3Index = -1;
@@ -74,13 +75,18 @@ function assignColumns(tokens) {
   if (tVal) {
     if (isThick(tVal)) {
       thick = tVal;
-    } else if ((tVal.length >= 3) && /^[0-9,.-]+$/.test(tVal)) {
+    } else if (tVal.length >= 3 && /^[0-9,.-]+$/.test(tVal)) {
       // Complex Merges Logic
       let handled = false;
 
       // Special case: Width+Thick merged with comma-hyphen (e.g., "63,3-108")
       // ONLY when length is a separate token in pool (pool.length > 0)
-      if (!handled && pool.length > 0 && tVal.indexOf(',') > -1 && tVal.indexOf('-') > -1) {
+      if (
+        !handled &&
+        pool.length > 0 &&
+        tVal.indexOf(",") > -1 &&
+        tVal.indexOf("-") > -1
+      ) {
         // Try splitting: last 1-2 digits are thick (plus potential hyphen separator)
         // e.g. "63,3-10" -> T="10", W="63,3" (strip -)
         for (let tLen = 1; tLen <= 2; tLen++) {
@@ -88,7 +94,7 @@ function assignColumns(tokens) {
           let widthPart = tVal.slice(0, -tLen);
 
           // Strip trailing hyphen if this was a separator
-          if (widthPart.endsWith('-')) widthPart = widthPart.slice(0, -1);
+          if (widthPart.endsWith("-")) widthPart = widthPart.slice(0, -1);
 
           if (isThick(thickPart) && isDim(widthPart)) {
             width = widthPart;
@@ -105,13 +111,19 @@ function assignColumns(tokens) {
         if (hyphens >= 2) {
           const t = tVal.slice(-1);
           const t2 = tVal.slice(-2);
-          let thickPart = "", rest = "";
+          let thickPart = "",
+            rest = "";
 
-          if (isThick(t) && !/-/.test(t)) { thickPart = t; rest = tVal.slice(0, -1); }
-          else if (isThick(t2) && !/-/.test(t2)) { thickPart = t2; rest = tVal.slice(0, -2); }
+          if (isThick(t) && !/-/.test(t)) {
+            thickPart = t;
+            rest = tVal.slice(0, -1);
+          } else if (isThick(t2) && !/-/.test(t2)) {
+            thickPart = t2;
+            rest = tVal.slice(0, -2);
+          }
 
           if (thickPart) {
-            const hyphen2 = rest.lastIndexOf('-');
+            const hyphen2 = rest.lastIndexOf("-");
             if (hyphen2 > 0) {
               const afterHyphen = rest.substring(hyphen2 + 1);
               const beforeHyphen = rest.substring(0, hyphen2);
@@ -121,9 +133,14 @@ function assignColumns(tokens) {
                 const lEnd = beforeHyphen.slice(0, -i);
                 if (/^\d+-\d+$/.test(lEnd)) {
                   // Check factor 3
-                  const lParts = lEnd.split('-').map(Number);
-                  if (lParts[1] > lParts[0] * 3 || lParts[1] < lParts[0] * 0.33) continue;
-                  length = lEnd; width = wStart + '-' + afterHyphen; thick = thickPart; handled = true; break;
+                  const lParts = lEnd.split("-").map(Number);
+                  if (lParts[1] > lParts[0] * 3 || lParts[1] < lParts[0] * 0.33)
+                    continue;
+                  length = lEnd;
+                  width = wStart + "-" + afterHyphen;
+                  thick = thickPart;
+                  handled = true;
+                  break;
                 }
               }
             }
@@ -131,7 +148,7 @@ function assignColumns(tokens) {
         }
 
         // 2. Comma+Hyphen Merge (10063,3-108)
-        if (!handled && (tVal.indexOf(',') > -1 && tVal.indexOf('-') > -1)) {
+        if (!handled && tVal.indexOf(",") > -1 && tVal.indexOf("-") > -1) {
           // Try T=1 digit first
           const t1 = tVal.slice(-1);
           const rest1 = tVal.slice(0, -1);
@@ -140,7 +157,10 @@ function assignColumns(tokens) {
             const l3 = rest1.slice(0, 3);
             const wRem = rest1.slice(3);
             if (isDim(l3) && isDim(wRem)) {
-              length = l3; width = wRem; thick = t1; handled = true;
+              length = l3;
+              width = wRem;
+              thick = t1;
+              handled = true;
             }
           }
         }
@@ -148,7 +168,6 @@ function assignColumns(tokens) {
         // 3. Permutation-Based Numeric Merge Solver
         // Replaces rigid if-else blocks with specific heuristic scoring
         if (!handled && /^\d+$/.test(tVal)) {
-
           // If pool has items (Length is likely separate), try 2-way split (W + T)
           if (pool.length > 0) {
             let best2 = null;
@@ -164,7 +183,15 @@ function assignColumns(tokens) {
               const tV = parseInt(tCand);
 
               // T sanity
-              if (tV === 6 || tV === 8 || tV === 10 || tV === 12 || tV === 15 || tV === 20) score += 10;
+              if (
+                tV === 6 ||
+                tV === 8 ||
+                tV === 10 ||
+                tV === 12 ||
+                tV === 15 ||
+                tV === 20
+              )
+                score += 10;
 
               // Width > Thick usually
               if (wV >= tV) score += 5;
@@ -178,7 +205,9 @@ function assignColumns(tokens) {
             }
 
             if (best2) {
-              width = best2.w; thick = best2.t; handled = true;
+              width = best2.w;
+              thick = best2.t;
+              handled = true;
             }
           }
 
@@ -207,9 +236,13 @@ function assignColumns(tokens) {
                 if (v1 === 0 || v2 === 0) continue;
 
                 contenders.push({
-                  l: s1, w: s2, t: s3,
-                  v1, v2, v3,
-                  score: 0
+                  l: s1,
+                  w: s2,
+                  t: s3,
+                  v1,
+                  v2,
+                  v3,
+                  score: 0,
                 });
               }
             }
@@ -217,7 +250,7 @@ function assignColumns(tokens) {
             if (contenders.length === 0) return null;
 
             // HEURISTIC SCORING
-            contenders.forEach(c => {
+            contenders.forEach((c) => {
               // 0. Perfect Cube Bonus: (15, 15, 15)
               if (c.v1 === c.v2 && c.v2 === c.v3) c.score += 15;
 
@@ -233,7 +266,7 @@ function assignColumns(tokens) {
               if (ratio > 20 || ratio < 0.05) c.score -= 20; // Penalize skew
 
               // 4. "Standard" Dimension Bonus (2-3 digits preferred for L/W)
-              // 1-digit L/W is rare (e.g. 5cm x 5cm). 
+              // 1-digit L/W is rare (e.g. 5cm x 5cm).
               if (c.l.length >= 2) c.score += 2;
               if (c.w.length >= 2) c.score += 2;
 
@@ -248,8 +281,8 @@ function assignColumns(tokens) {
 
               // 7. 220158 -> 220, 15, 8. (Ratio 14). Score 10 + 5 + 0 + 2 + 2 + 1 = 20.
               // 22, 015, 8 (Ratio 1.4). Score 10 + 5 + 0 + 2 + 2 + 1 = 20.
-              // Tie? 
-              // Prefer "Larger Length"? 
+              // Tie?
+              // Prefer "Larger Length"?
               // Or prefer "Cut balance"?
               // If tie, prefer candidate where L is longer (standard formatting).
             });
@@ -274,8 +307,12 @@ function assignColumns(tokens) {
       }
 
       if (!handled) {
-        if (tVal.length === 2 && !isThick(tVal)) { thick = tVal[1]; width = tVal[0]; }
-        else { thick = tVal; }
+        if (tVal.length === 2 && !isThick(tVal)) {
+          thick = tVal[1];
+          width = tVal[0];
+        } else {
+          thick = tVal;
+        }
       }
     } else {
       thick = tVal;
@@ -285,8 +322,10 @@ function assignColumns(tokens) {
   // B. Width
   function split4(str) {
     if (str.length !== 4) return null;
-    const a1 = str.slice(0, 2); const a2 = str.slice(2);
-    const b1 = str.slice(0, 3); const b2 = str.slice(3);
+    const a1 = str.slice(0, 2);
+    const a2 = str.slice(2);
+    const b1 = str.slice(0, 3);
+    const b2 = str.slice(3);
     if (parseInt(a1) > 10 && parseInt(a2) > 10) return [a1, a2];
     if (parseInt(b1) > 100 && parseInt(b2) < 10) return [b1, b2];
     return [a1, a2];
@@ -297,7 +336,8 @@ function assignColumns(tokens) {
     if (wVal) {
       if (/^\d{4}$/.test(wVal) && pool.length === 0) {
         const parts = split4(wVal);
-        width = parts[1]; length = parts[0];
+        width = parts[1];
+        length = parts[0];
       } else {
         width = wVal;
       }
@@ -313,17 +353,33 @@ function assignColumns(tokens) {
   // Repair Logic (Shifted Columns)
   if (!length && width && thick && thick.length > 1 && /^\d+$/.test(thick)) {
     let val = thick;
-    let t = "", w = "";
+    let t = "",
+      w = "";
     if (val.length === 4) {
-      const splitW = val.slice(0, 2); const splitT = val.slice(2);
-      if (isDim(splitW) && isThick(splitT)) { w = splitW; t = splitT; }
+      const splitW = val.slice(0, 2);
+      const splitT = val.slice(2);
+      if (isDim(splitW) && isThick(splitT)) {
+        w = splitW;
+        t = splitT;
+      }
     }
-    if (!t || !w) { t = val.slice(-1); w = val.slice(0, -1); }
-    if (isThick(t) && isDim(w) && isDim(width)) { length = width; width = w; thick = t; }
+    if (!t || !w) {
+      t = val.slice(-1);
+      w = val.slice(0, -1);
+    }
+    if (isThick(t) && isDim(w) && isDim(width)) {
+      length = width;
+      width = w;
+      thick = t;
+    }
   }
   if (!length && width && width.length > 2 && /^\d+$/.test(width)) {
-    const w = width.slice(-1); const l = width.slice(0, -1);
-    if (isDim(l) && isDim(w)) { length = l; width = w; }
+    const w = width.slice(-1);
+    const l = width.slice(0, -1);
+    if (isDim(l) && isDim(w)) {
+      length = l;
+      width = w;
+    }
   }
 
   // E. Overlap Repair: Leaked digit from Width into Thick (Reverse of D)
@@ -335,7 +391,11 @@ function assignColumns(tokens) {
     const restThick = thick.slice(1);
 
     // Only attempt if trimming makes Width 2-digits (standard) and remaining Thick is valid
-    if (width.length === 1 && /\d/.test(firstDigitThick) && isThick(restThick)) {
+    if (
+      width.length === 1 &&
+      /\d/.test(firstDigitThick) &&
+      isThick(restThick)
+    ) {
       width = width + firstDigitThick;
       thick = restThick;
     }
@@ -343,7 +403,13 @@ function assignColumns(tokens) {
 
   // D. Overlap Repair: Leaked digit from Thick into Width
   // e.g. Width="201", Thick="10" -> "201" ends with "1" (first char of "10") -> Trim to "20"
-  if (width && thick && /^\d+$/.test(width) && /^\d+$/.test(thick) && width.length > 2) {
+  if (
+    width &&
+    thick &&
+    /^\d+$/.test(width) &&
+    /^\d+$/.test(thick) &&
+    width.length > 2
+  ) {
     const firstDigitThick = thick.charAt(0);
     if (width.endsWith(firstDigitThick)) {
       // Check if trimming makes it a standard width or better ratio
@@ -369,30 +435,64 @@ function assignColumns(tokens) {
   let material = "";
 
   if (descTokens.length > 0) {
-    if (/^\d+$/.test(descTokens[0])) { pcs = descTokens.shift(); }
+    if (/^\d+$/.test(descTokens[0])) {
+      pcs = descTokens.shift();
+    }
   }
   if (descTokens.length > 0) {
-    item = descTokens[0];
-    if (descTokens.length > 1) material = descTokens.slice(1).join(" ");
+    if (descTokens.length > 0) {
+      const itemParts = [descTokens.shift()];
+
+      // Greedy consume "left" or "right" modifiers for Item
+      // "material should not contain the word left or right"
+      while (descTokens.length > 0) {
+        const t = descTokens[0].toLowerCase();
+        if (t === "left" || t === "right" || t === "front" || t === "back") {
+          itemParts.push(descTokens.shift());
+        } else {
+          break;
+        }
+      }
+
+      item = itemParts.join(" ");
+
+      // Remaining tokens are material, but filter out directional words
+      if (descTokens.length > 0) {
+        const materialParts = [];
+        for (const token of descTokens) {
+          const lower = token.toLowerCase();
+          // Don't include directional words in material
+          if (
+            lower !== "left" &&
+            lower !== "right" &&
+            lower !== "front" &&
+            lower !== "back"
+          ) {
+            materialParts.push(token);
+          }
+        }
+        material = materialParts.join(" ");
+      }
+    }
   }
 
   // 5. M3 VALIDATION & REPAIR
   // Determine if (L * W * T) matches M3. If not, try shifting leaked digits.
   if (length && width && (thick || (width && width.length > 2)) && m3) {
-
     // Helper to calculate theoretical m3 from L, W, T (in cm, cm, cm -> m3)
     const calcM3 = (l, w, t) => {
       if (!l || !w || !t) return 0;
       // Handle ranges: take avg? Or max? Usually range is tolerance.
       // Let's take the first value of range for calculation
-      const getVal = (v) => parseFloat(v.toString().split('-')[0].replace(',', '.'));
+      const getVal = (v) =>
+        parseFloat(v.toString().split("-")[0].replace(",", "."));
       const lV = getVal(l);
       const wV = getVal(w);
       const tV = getVal(t);
       return (lV * wV * tV) / 1000000;
     };
 
-    const targetM3 = parseFloat(m3.replace(',', '.'));
+    const targetM3 = parseFloat(m3.replace(",", "."));
     const pcsVal = parseInt(pcs) || 1;
 
     // Check match function (Relative Error < 10%)
@@ -402,7 +502,7 @@ function assignColumns(tokens) {
       // If target is very small, use absolute tolerance
       if (targetM3 < 0.01) return diff < 0.002;
       // Else use relative 10% tolerance
-      return (diff / targetM3) < 0.10;
+      return diff / targetM3 < 0.1;
     };
 
     let currentM3 = calcM3(length, width, thick);
@@ -415,7 +515,11 @@ function assignColumns(tokens) {
 
       // Repair 0: Width contains Thick (e.g. Width="803", Thick="" or "0")
       // Trigger if Thick is missing/invalid OR if Width is 3+ digits and looks suspicious
-      if ((!thick || thick === "0" || !isThick(thick)) && width && width.length >= 2) {
+      if (
+        (!thick || thick === "0" || !isThick(thick)) &&
+        width &&
+        width.length >= 2
+      ) {
         // Try splitting last 1 or 2 digits from Width as Thick
         for (let cut = 1; cut <= 2; cut++) {
           if (width.length <= cut) continue;
@@ -452,8 +556,11 @@ function assignColumns(tokens) {
         if (isMatch(val) || isMatch(val * pcsVal)) {
           repairs.push({ l: newL, w: newW, t: thick });
         }
-      }
-      else if (width.length > 1 && /^\d+$/.test(width) && /^\d+$/.test(length)) {
+      } else if (
+        width.length > 1 &&
+        /^\d+$/.test(width) &&
+        /^\d+$/.test(length)
+      ) {
         // Standard reverse leak check
         const digit = width.charAt(0);
         const newW = width.slice(1);
@@ -476,7 +583,12 @@ function assignColumns(tokens) {
       }
 
       // Repair 4: Digit leaked T -> W (e.g. 7, 510 -> 75, 10)
-      if (thick && thick.length > 1 && /^\d+$/.test(thick) && /^\d+$/.test(width)) {
+      if (
+        thick &&
+        thick.length > 1 &&
+        /^\d+$/.test(thick) &&
+        /^\d+$/.test(width)
+      ) {
         const digit = thick.charAt(0);
         const newT = thick.slice(1);
         const newW = width + digit;
@@ -492,7 +604,7 @@ function assignColumns(tokens) {
         width = repairs[0].w;
         thick = repairs[0].t;
       } else if (length.length > 3 && /^\d+$/.test(length)) {
-        // FALLBACK: Length > 3 is illegal (User Rule). 
+        // FALLBACK: Length > 3 is illegal (User Rule).
         // If no m3 match found, FORCE split last digit to width anyway as a desperate fix
         // e.g. 1501, 2 -> 150, 12
         const digit = length.slice(-1);
