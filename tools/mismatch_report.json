@@ -1,0 +1,95 @@
+{
+  "generatedAt": "2025-12-14T08:24:52.534Z",
+  "report": [
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "headstones",
+        "length": "55",
+        "width": "105",
+        "thick": "8"
+      },
+      "got": {
+        "length": "55",
+        "width": "105",
+        "thick": "8"
+      },
+      "status": "ok"
+    },
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "base",
+        "length": "130",
+        "width": "25",
+        "thick": "10"
+      },
+      "got": {
+        "length": "13",
+        "width": "25",
+        "thick": "10"
+      },
+      "status": "mismatch"
+    },
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "sidekerbs",
+        "length": "220",
+        "width": "15",
+        "thick": "8"
+      },
+      "got": {
+        "length": "22",
+        "width": "15",
+        "thick": "8"
+      },
+      "status": "mismatch"
+    },
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "frontkerb",
+        "length": "130",
+        "width": "15",
+        "thick": "8"
+      },
+      "got": {
+        "length": "13",
+        "width": "15",
+        "thick": "8"
+      },
+      "status": "mismatch"
+    },
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "gardenkerb",
+        "length": "100",
+        "width": "63.3",
+        "thick": "10"
+      },
+      "got": {
+        "length": "6",
+        "width": "3.3",
+        "thick": "1"
+      },
+      "status": "mismatch"
+    },
+    {
+      "expected": {
+        "order": "11-074",
+        "item": "bowed",
+        "length": "30",
+        "width": "28",
+        "thick": "10"
+      },
+      "got": {
+        "length": "30",
+        "width": "28",
+        "thick": "10"
+      },
+      "status": "ok"
+    }
+  ]
+}

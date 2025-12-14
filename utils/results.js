@@ -1,7 +1,7 @@
 const extractJsonFromPDF = require("./extractJsonFromPDF");
 const sanitizeAIResponse = require("./sanitizeAIResponse");
 const tryFixJson = require("./tryFixJson");
-const assignColumns = require("./assignColumns");
+const assignColumns = require("./assignColumns_refactored");
 const normalizePdfText = require("./normalizePdfText");
 
 const fs = require("fs");
@@ -59,10 +59,7 @@ const resultsFunc = async (req) => {
 
           for (const r of parsed.rows) {
             try {
-              const result = assignColumns(r.tokens);
-              // Add order and client to each material detail row
-              result.order = order;
-              result.client = client;
+              const result = assignColumns(r.tokens, order, client);
               parsed.material_details.push(result);
               console.log(
                 `✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`

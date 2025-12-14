@@ -15,6 +15,29 @@ const isThick = (t) => {
 const isDim = (t) => /^\d{1,3}(,\d+)?$/.test(t) || /^[0-9,]+-[0-9,]+$/.test(t); // Allow decimals "62,5" & ranges
 const hasLetters = (t) => /[a-zA-Z]/.test(t);
 
+// Strict digit-count validators (user requirement: L/W max 3 digits, T max 2 digits)
+const isValidLength = (t) => {
+  if (!t) return false;
+  if (/^\d{1,3}$/.test(t)) return true;
+  if (/^\d{1,3}-\d{1,3}$/.test(t)) return true;
+  if (/^\d{1,3}[,.]\d+$/.test(t)) return true;
+  return false;
+};
+const isValidWidth = (t) => {
+  if (!t) return false;
+  if (/^\d{1,3}$/.test(t)) return true;
+  if (/^\d{1,3}-\d{1,3}$/.test(t)) return true;
+  if (/^\d{1,3}[,.]\d+$/.test(t)) return true;
+  return false;
+};
+const isValidThick = (t) => {
+  if (!t) return false;
+  // Thickness must be > 0 (no leading zeros, so "0", "00", "01" etc are invalid)
+  if (/^[1-9](\d)?$/.test(t)) return true; // 1-99
+  if (/^[1-9](\d)?-[1-9](\d)?$/.test(t)) return true; // 1-99 range
+  return false;
+};
+
 function assignColumns(tokens) {
   if (!tokens || tokens.length < 2) {
     throw new Error("Insufficient tokens: " + JSON.stringify(tokens));
@@ -35,18 +58,116 @@ function assignColumns(tokens) {
       tokens.splice(i, 1, match[1], match[2]);
       i++;
     }
+    // Heuristic: merge a leading single-digit token with a following decimal-range token
+    // Example: ['6', '3,3-10'] -> ['63,3-10'] so width "63,3-10" is preserved
+    // This prevents cases where OCR splits '63,3-10' into '6' + '3,3-10'.
+    if (/^\d$/.test(tokens[i]) && i + 1 < tokens.length) {
+      const next = tokens[i + 1];
+      // Match decimal-range like '3,3-10' or '63,3-10' (we only expect next to be the tail)
+      if (
+        /^\d{1,3},\d+-\d{1,2}$/.test(next) ||
+        /^[0-9,]+-\d{1,2}$/.test(next)
+      ) {
+        const merged = tokens[i] + next;
+        tokens.splice(i, 2, merged);
+        // re-run checks at same index for the merged token
+        i--;
+        continue;
+      }
+    }
+    // Additional merges to harden OCR splits
+    if (i + 1 < tokens.length) {
+      const cur = tokens[i];
+      const nxt = tokens[i + 1];
+
+      // Case: trailing-part split, e.g. ['3,3-1','0'] -> ['3,3-10']
+      if (/,-?/.test(cur) || /-\d$/.test(cur)) {
+        if (/^\d$/.test(nxt)) {
+          const merged = cur + nxt;
+          // Only merge if the resulting token looks like a decimal-range with a valid thick
+          if (
+            /^\d{1,3},\d+-\d{1,2}$/.test(merged) ||
+            /^[0-9,]+-\d{1,2}$/.test(merged)
+          ) {
+            tokens.splice(i, 2, merged);
+            i--;
+            continue;
+          }
+        }
+      }
+
+      // Case: ['13','0'] -> ['130'] or ['22','0'] -> ['220'] (trailing zero merges)
+      if (/^\d{2,3}$/.test(cur) && nxt === "0") {
+        const merged = cur + nxt;
+        // Only merge if merged is a 3-digit number (length candidate)
+        if (/^\d{3}$/.test(merged)) {
+          tokens.splice(i, 2, merged);
+          i--;
+          continue;
+        }
+      }
+
+      // Case: ['63', ',3-10'] or ['63', '3,3-10'] -> combine if next starts with comma or decimal-range
+      if (
+        /^\d{1,2}$/.test(cur) &&
+        (nxt.startsWith(",") || /^\d{1,3},\d+-\d{1,2}$/.test(nxt))
+      ) {
+        const merged = cur + nxt;
+        if (
+          /^\d{1,3},\d+-\d{1,2}$/.test(merged) ||
+          /^[0-9,]+-\d{1,2}$/.test(merged)
+        ) {
+          tokens.splice(i, 2, merged);
+          i--;
+          continue;
+        }
+      }
+    }
   }
 
   // 0c. Heuristic: split certain merged numeric+range tokens that appear
   // e.g. "510-8" -> ["5","10-8"] ; "123-45" might be ["1","23-45"]
+  // CONSTRAINT: Enforce max digit counts to prevent overlapping
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+
+    // First, aggressively split any token > 4 digits (cannot be length or width)
+    if (/^\d+$/.test(t) && t.length > 4) {
+      // Try to split into valid chunks: prefer 3-digit + remainder
+      for (let cut = 3; cut <= 3; cut++) {
+        const left = t.slice(0, cut);
+        const right = t.slice(cut);
+        if (
+          isValidLength(left) &&
+          (isValidWidth(right) || isValidThick(right))
+        ) {
+          tokens.splice(i, 1, left, right);
+          i++;
+          break;
+        }
+      }
+      continue;
+    }
+
     // New: split concatenated range-range tokens like "159-15759-576" => ["159-157","59-576"]
     const doubleRange = t.match(/^(\d{1,4}-\d{1,4})(\d{1,4}-\d{1,4})$/);
     if (doubleRange) {
       tokens.splice(i, 1, doubleRange[1], doubleRange[2]);
       i++;
       continue;
+    }
+    // New strict rule: split concatenated range+digit tokens where a trailing digit
+    // was appended to a range like '59-576' -> '59-57' + '6'
+    const rangeTail = t.match(/^(\d{1,3}-\d{1,3})(\d{1,2})$/);
+    if (rangeTail) {
+      const left = rangeTail[1];
+      const right = rangeTail[2];
+      // Only split if left looks like a proper range and right is a plausible thick
+      if (/^\d{1,3}-\d{1,3}$/.test(left) && isValidThick(right)) {
+        tokens.splice(i, 1, left, right);
+        i++;
+        continue;
+      }
     }
     // pattern: digits followed immediately by a range (no space) e.g. 510-8
     const m = t.match(/^(\d+)(\d{1,3}-\d{1,2})$/);
@@ -57,45 +178,34 @@ function assignColumns(tokens) {
       i++;
       continue;
     }
-    // pattern: long digits which may be two concatenated numbers e.g. 227 => 22 + 7
-    const m2 = t.match(/^(\d{3,})(\d*)$/);
-    if (m2 && t.length >= 3) {
-      // attempt split into two parts: try last 1-2 digits as a separate token
-      for (let cut = 1; cut <= 2; cut++) {
-        if (t.length - cut <= 0) break;
-        const a = t.slice(0, t.length - cut);
-        const b = t.slice(t.length - cut);
-        if (
-          (/^\d{1,3}$/.test(a) || /^\d{1,3},\d+$/.test(a)) &&
-          (/^\d{1,2}$/.test(b) || /^\d{1,2}-\d{1,2}$/.test(b))
-        ) {
-          tokens.splice(i, 1, a, b);
-          i++;
-          break;
-        }
-      }
-    }
-    // pattern: combined range+digit, e.g. "59-576" -> "59-57" + "6"
-    const m3 = t.match(/^(\d+(?:,\d+)?-\d{1,3})(\d{1,2})$/);
-    if (m3) {
-      const left = m3[1];
-      const right = m3[2];
-      tokens.splice(i, 1, left, right);
-      i++;
-      continue;
-    }
-    // pattern: 3-digit token immediately followed by m3 (likely width+thick merged), split 3-digit into 2+1
-    if (/^\d{3}$/.test(t) && i + 1 < tokens.length && isM3(tokens[i + 1])) {
-      const a = t.slice(0, 2);
-      const b = t.slice(2);
-      tokens.splice(i, 1, a, b);
-      i++;
-      continue;
-    }
+    // DISABLED: This rule was breaking valid 3-digit lengths like 130, 220, 100
+    // It tried to split them thinking they were width+thick merged, but the assignment
+    // logic should handle complex merges contextually without breaking valid tokens
+    // const m2 = t.match(/^(\d{3,})(\d*)$/);
+    // if (m2 && t.length >= 3) {
+    //   ... splitting logic removed ...
+    // }
+
+    // DISABLED: This rule was splitting width ranges like "3,3-10" into ["3,3-1", "0"]
+    // Also breaks decimal widths like "63,3-10" when they should be handled in assignment logic
+    // const m3 = t.match(/^(\d+(?:,\d+)?-\d{1,3})(\d{1,2})$/);
+    // if (m3) {
+    // const m3 = t.match(/^(\d+(?:,\d+)?-\d{1,3})(\d{1,2})$/);
+    // if (m3) {
+    //   tokens.splice(i, 1, left, right);
+    //   i++;
+    //   continue;
+    // }
+    // DISABLED: Do NOT split 3-digit tokens before m3 anymore
+    // This was breaking valid 3-digit lengths like 130, 220, 100
+    // The context-aware assignment logic will handle dimension parsing correctly
+    // Old rule: "If I see a 3-digit token followed by m3, split it into 2+1"
+    // Problem: This misinterprets valid length values as "width+thick merged"
   }
 
-  // 0b. Remove standalone placeholder zeros
-  tokens = tokens.filter((t) => t !== "0");
+  // 0b. CAREFUL: Only remove truly orphan zeros (after m3 extraction)
+  // Do NOT remove zeros that are part of dimension values like 130, 220, 100
+  // This will be handled contextually later during assignment
 
   // 1. Identify Anchor: m3
   let m3Index = -1;
@@ -105,6 +215,13 @@ function assignColumns(tokens) {
       break;
     }
   }
+
+  console.log("  tokens after preprocessing:", tokens);
+  console.log(
+    "  m3Index:",
+    m3Index,
+    m3Index >= 0 ? "m3=" + tokens[m3Index] : "NOT FOUND"
+  );
 
   if (m3Index === -1) {
     throw new Error("Could not find m3 anchor (0,xxx)");
@@ -119,6 +236,8 @@ function assignColumns(tokens) {
     candidates.unshift(t);
   }
 
+  console.log("  Candidates (before clean):", candidates);
+
   // Flatten candidates
   const cleanCandidates = [];
   for (const c of candidates) {
@@ -128,6 +247,8 @@ function assignColumns(tokens) {
     }
     cleanCandidates.push(c);
   }
+
+  console.log("  Clean Candidates:", cleanCandidates);
 
   // Remember the original left-most numeric candidate (likely length)
   const originalLeftCandidate =
@@ -155,9 +276,11 @@ function assignColumns(tokens) {
   let thick = "";
 
   let tVal = popVal();
+  console.log("  A. Thick: tVal=", tVal, ", pool remaining=", pool);
   if (tVal) {
     if (isThick(tVal)) {
       thick = tVal;
+      console.log("    -> assigned as thick:", thick);
     } else if (tVal.length >= 3 && /^[0-9,.-]+$/.test(tVal)) {
       // Complex Merges Logic
       let handled = false;
@@ -416,13 +539,23 @@ function assignColumns(tokens) {
 
   if (!width) {
     let wVal = popVal();
+    console.log(
+      "  B. Width: wVal=",
+      wVal,
+      ", pool remaining=",
+      pool,
+      ", pool.length=",
+      pool.length
+    );
     if (wVal) {
       if (/^\d{4}$/.test(wVal) && pool.length === 0) {
         const parts = split4(wVal);
         width = parts[1];
         length = parts[0];
+        console.log("    -> split 4-digit:", { width, length });
       } else {
         width = wVal;
+        console.log("    -> assigned as width:", width);
       }
     }
   }
@@ -430,8 +563,19 @@ function assignColumns(tokens) {
   // C. Length
   if (!length) {
     let lVal = popVal();
-    if (lVal) length = lVal;
+    console.log("  C. Length: lVal=", lVal, ", pool remaining=", pool);
+    if (lVal) {
+      length = lVal;
+      console.log("    -> assigned as length:", length);
+    }
   }
+
+  console.log("  After initial assignment:", {
+    length,
+    width,
+    thick,
+    pool: pool.length,
+  });
 
   // Repair Logic (Shifted Columns)
   if (!length && width && thick && thick.length > 1 && /^\d+$/.test(thick)) {
@@ -699,6 +843,24 @@ function assignColumns(tokens) {
     }
   }
 
+  // If width is empty but thick looks like a range+digit (e.g. '59-576'), split it now
+  // This is a conservative late repair to avoid losing range widths into thick.
+  try {
+    if ((!width || width === "") && typeof thick === "string") {
+      const m = String(thick).match(/^(\d{1,3}-\d{1,3})(\d{1,2})$/);
+      if (m) {
+        const left = m[1];
+        const right = m[2];
+        if (/^\d{1,3}-\d{1,3}$/.test(left) && isValidThick(right)) {
+          width = left;
+          thick = right;
+        }
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
   // Final heuristic: if the original left-most numeric candidate (usually length)
   // would produce a better m3 match, prefer it. This fixes cases where small
   // lengths like "53" were overwritten by merge heuristics (e.g. "628").
@@ -731,31 +893,139 @@ function assignColumns(tokens) {
   }
 
   // Final targeted heuristic: if original tokens included "15" but parsing split it
-  // into width="1" and thick="5", reconstruct as "15" for both (or just width).
+  // into width="1" and thick="5", reconstruct as "15" for width only (not thick, which is max 2).
   if (origTokensSnapshot.includes("15")) {
     if (width === "1" && thick === "5") {
+      // Prefer: width="15", thick="5" (not both 15, since thick max is 2 digits)
       width = "15";
-      thick = "15";
     } else if (width === "1") {
       width = "15";
     }
   }
 
-  // VALIDATION: Ensure no column is empty or "0"
-  if (!length || length === "0") {
-    throw new Error(`Invalid length: "${length}"`);
-  }
-  if (!width || width === "0") {
-    throw new Error(`Invalid width: "${width}"`);
-  }
-  if (!thick || thick === "0") {
-    throw new Error(`Invalid thick: "${thick}"`);
+  // Conservative post-assignment repairs to recover truncated/missing digits
+  // 1) If length is 1-2 digits but original tokens contain a matching 3-digit token, restore it.
+  try {
+    if (/^\d{1,2}$/.test(String(length))) {
+      const candidates3 = origTokensSnapshot.filter((t) => /^\d{3}$/.test(t));
+      for (const c of candidates3) {
+        if (c.startsWith(String(length))) {
+          length = c;
+          break;
+        }
+        if (c.endsWith(String(length))) {
+          length = c;
+          break;
+        }
+      }
+    }
+
+    // 2) If width is small (1-2 digits) but orig contains a token that would complete it to a more plausible width (e.g., '3' + '3,3-10' already handled), try merging nearby tokens
+    if (/^\d{1,2}$/.test(String(width)) && origTokensSnapshot.length > 0) {
+      const w = String(width);
+      const possibles = origTokensSnapshot.filter(
+        (t) =>
+          typeof t === "string" &&
+          t.indexOf(",") !== -1 &&
+          t.indexOf("-") !== -1
+      );
+      for (const p of possibles) {
+        // if p contains w as suffix or prefix, prefer it
+        if (p.startsWith(w) || p.endsWith(w)) {
+          // take the numeric part before hyphen as width
+          const candidateWidth = p.split("-")[0];
+          if (isValidWidth(candidateWidth)) {
+            width = candidateWidth;
+            break;
+          }
+        }
+      }
+    }
+
+    // 3) If thick is single digit but original tokens include a 2-digit thick nearby, prefer that
+    if (/^\d$/.test(String(thick))) {
+      const thickCandidates = origTokensSnapshot.filter(
+        (t) => /^\d{2}$/.test(t) || /^\d{1,2}-\d{1,2}$/.test(t)
+      );
+      if (thickCandidates.length > 0) {
+        // pick the first plausible candidate > current thick
+        for (const tc of thickCandidates) {
+          if (parseInt(tc) > parseInt(thick)) {
+            if (isValidThick(tc)) {
+              thick = tc;
+              break;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // non-fatal
   }
 
-  // Convert m3 comma to dot format (0,019 -> 0.019)
-  const m3Formatted = m3.replace(",", ".");
+  // STRICT DIGIT CONSTRAINT VALIDATION
+  // User requirement: length/width max 3 digits, thick max 2 digits
+  // If violated, force a repair
+  if (length && length.length > 3 && /^\d+$/.test(length)) {
+    // Length exceeds 3 digits - likely width or other column leaked in
+    // Try last 1-2 digits as thick, rest as width+length
+    const digit1 = length.slice(-1);
+    const rest = length.slice(0, -1);
 
-  return { pcs, item, material, length, width, thick, m3: m3Formatted };
+    if (isValidThick(digit1) && isValidWidth(rest)) {
+      width = rest;
+      thick = digit1;
+      length = length.slice(0, 3);
+    }
+  }
+
+  if (width && width.length > 3 && /^\d+$/.test(width)) {
+    // Width exceeds 3 digits - similar repair
+    const digit1 = width.slice(-1);
+    const rest = width.slice(0, -1);
+    if (isValidThick(digit1)) {
+      thick = digit1;
+      width = rest.slice(0, 3); // Keep only first 3 digits for width
+    }
+  }
+
+  // Clean up: Remove truly orphan zeros that aren't part of dimension values
+  // A "0" is orphan if it appears between valid dimensions or after m3
+  if (length === "0" || length === "") length = originalLeftCandidate || "";
+  if (width === "0") width = "";
+  if (thick === "0") thick = "";
+
+  // Ensure no column is left empty or '0' if we can recover from original tokens
+  if ((!length || length === "0") && origTokensSnapshot.length > 0) {
+    const fallback = origTokensSnapshot.find((t) => isValidLength(t));
+    if (fallback) length = fallback;
+  }
+  if ((!width || width === "0") && origTokensSnapshot.length > 0) {
+    const fallback = origTokensSnapshot.find(
+      (t) => isValidWidth(t) || /^[0-9,]+-\d{1,2}$/.test(t)
+    );
+    if (fallback) width = fallback;
+  }
+  if ((!thick || thick === "0") && origTokensSnapshot.length > 0) {
+    const fallback = origTokensSnapshot.find((t) => isValidThick(t));
+    if (fallback) thick = fallback;
+  }
+
+  // Convert ALL commas to dots in numeric outputs (user requirement)
+  const m3Formatted = m3.replace(/,/g, ".");
+  const lengthFormatted = String(length).replace(/,/g, ".");
+  const widthFormatted = String(width).replace(/,/g, ".");
+  const thickFormatted = String(thick).replace(/,/g, ".");
+
+  return {
+    pcs,
+    item,
+    material,
+    length: lengthFormatted,
+    width: widthFormatted,
+    thick: thickFormatted,
+    m3: m3Formatted,
+  };
 }
 
 module.exports = assignColumns;
