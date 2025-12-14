@@ -30,16 +30,25 @@ const resultsFunc = async (req) => {
           parsed = JSON.parse(tryFixJson(rawJson));
         }
 
+        // Extract order and client if present
+        const order = parsed.order || null;
+        const client = parsed.client || null;
+
         // Check for new prompt format (Direct material_details)
         if (Array.isArray(parsed.material_details)) {
           if (parsed.material_details.length === 0) {
-            throw new Error("No valid material rows extracted (material_details empty)");
+            throw new Error(
+              "No valid material rows extracted (material_details empty)"
+            );
           }
           console.log(`✅ Using LLM-assigned columns (New Prompt)`);
-          // We trust the LLM's assignment primarily, but maybe we want to run normalization?
-          // For now, pass it through.
-        }
-        else if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+          // Associate order and client with each row
+          parsed.material_details = parsed.material_details.map((row) => ({
+            ...row,
+            order: order,
+            client: client,
+          }));
+        } else if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
           // Old Prompt Format (Tokens -> assignColumns manual logic)
           // Remove note words ONLY
           parsed.rows = parsed.rows.map((r) => ({
@@ -51,8 +60,13 @@ const resultsFunc = async (req) => {
           for (const r of parsed.rows) {
             try {
               const result = assignColumns(r.tokens);
+              // Add order and client to each material detail row
+              result.order = order;
+              result.client = client;
               parsed.material_details.push(result);
-              console.log(`✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`);
+              console.log(
+                `✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`
+              );
             } catch (e) {
               console.warn("❌ Row skipped - Reason:", e.message);
               console.warn("   Tokens were:", JSON.stringify(r.tokens));

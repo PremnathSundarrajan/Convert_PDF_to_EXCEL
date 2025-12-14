@@ -50,7 +50,21 @@ const convert = async (req, res) => {
 
     // Calculate proper column widths based on content
     const columnWidths = {};
-    const headers = Object.keys(combinedRows[0] || {});
+
+    // Compute headers as the union of keys across all rows so columns
+    // like `order`, `client`, and `item` are always present even if
+    // the first row doesn't contain them.
+    const headerSet = new Set();
+    combinedRows.forEach((r) => {
+      if (r && typeof r === "object") {
+        Object.keys(r).forEach((k) => headerSet.add(k));
+      }
+    });
+    // Ensure common expected columns exist
+    headerSet.add("item");
+    headerSet.add("material");
+    headerSet.add("pcs");
+    const headers = Array.from(headerSet);
 
     headers.forEach((header) => {
       // Start with header length
@@ -73,6 +87,11 @@ const convert = async (req, res) => {
         maxAllowed = 55; // Item can also be longer (increased from 45)
       } else if (header.toLowerCase() === "notes") {
         maxAllowed = 55; // Notes can be long
+      } else if (
+        header.toLowerCase() === "order" ||
+        header.toLowerCase() === "client"
+      ) {
+        maxAllowed = 30; // Order and client are typically shorter
       }
 
       // Ensure minimum width of 12 and apply the appropriate maximum

@@ -10,47 +10,54 @@ async function extractJsonFromPDF(text) {
     "You are a strict JSON-only assistant. Return ONLY valid JSON. No markdown. No comments.";
 
   const prompt = `
-Extract ALL material rows from this PDF table. Return raw tokens EXACTLY as they appear.
+EXTRACT THREE TYPES OF DATA FROM THIS PDF:
 
-CRITICAL - EXTRACT EVERY ROW:
+1. SINGLE-VALUE FIELDS (extract if present):
+   - order: Look for 'order', 'Order', 'ORDER', 'order no', 'order number' - extract the value
+   - client: Look for 'client', 'Client', 'CLIENT', 'client name' - extract the value
+   - If field is missing, use null
+
+2. MATERIAL ROWS from the PDF table:
+   Extract ALL product rows with EXACTLY the tokens as they appear in the table columns, separated by whitespace.
+
+CRITICAL TOKEN EXTRACTION RULES:
+- Each row contains space-separated table columns
+- Tokens are space-separated values in the PDF table
+- Do NOT merge tokens that are separated by spaces
+- If PDF shows: "1  column  royal impala  22  75  10-8  0,017" → extract ["1", "column", "royal", "impala", "22", "75", "10-8", "0,017"]
+- DO NOT concatenate: "227" (from "22" and "75" being adjacent)
+- DO NOT concatenate: "510-8" (from "5" and "10-8" being adjacent)
+- ONLY keep merged tokens if they are genuinely printed as a single token in the PDF (rare edge case)
+
+WHAT CONSTITUTES A SINGLE TOKEN:
+- A token is ANY sequence that appears between whitespace characters
+- "22" is one token, "75" is another token
+- "10-8" is ONE token (contains hyphen but no spaces)
+- "royal" is one token, "impala" is another
+
+ROW EXTRACTION:
 - DO NOT SKIP ANY ROWS. Extract EVERY product row.
-- Extract ANY row that starts with a quantity (e.g. "1", "2") and ends with an m3 value (e.g. "0,041").
-- Common items: headstone, tombstone, kerbs, sidekerbs, frontkerb, backskirt, sideskirts, frontskirt, flowerblock, base, bowed, gardenkerb, coverplate, plate.
-- If you see ANY product item, you MUST extract it.
+- Extract ANY row that starts with a quantity (e.g., "1", "2") and contains text items and ends with m3 value
+- Common items: headstone, tombstone, kerbs, column, sidekerbs, frontkerb, backskirt, base, plate, etc.
 
-RULES:
-1. DO NOT SPLIT NUMBERS: If you see "551058" keep it as "551058" - our system will split it.
-2. DO NOT SPLIT RANGES: Keep "159-157" or "63,3-10" as single tokens.
-3. NEVER ADD ZEROS: Do NOT add "0" as placeholder. If a value is merged, just return the merged value.
-4. KEEP MERGED VALUES: If "55 105 8" appears as "551058", return "551058" only - NOT "551058", "0", "0".
-5. Stop at: TOTAL, SUBTOTAL, Finish:, or summary lines.
-6. IGNORE: Headers, dates, order numbers, client names, factory info, notes like "with punched line".
+COLUMN ORDER (typical):
+pcs → item (may be multiple words) → material (may be multiple words) → length → width → thick → m3
 
-COLUMN FORMATS:
-- pcs: 1-2 digits (e.g., "1", "2")
-- item: text (e.g., "headstone", "kerbs", "backskirt")
-- material: text (e.g., "black premium", "indian aurora")
-- length: 1-3 digits OR range (e.g., "53", "180", "159-157")
-- width: 1-3 digits OR range (e.g., "62", "105", "63,3-10", "59-57")
-- thick: 1-2 digits (e.g., "6", "8", "10")
-- m3: Always "0,XXX" format (e.g., "0,026", "0,108")
+STOP EXTRACTION at: TOTAL, SUBTOTAL, Finish:, notes/finish descriptions, or summary lines.
 
 Example OUTPUT FORMAT:
 {
+  "order": "12-008",
+  "client": "Miali",
   "rows": [
-    { "tokens": ["1", "headstone", "black", "premium", "53", "62", "8", "0,026"] },
-    { "tokens": ["1", "tombstone", "black", "premium", "159-157", "59-57", "6", "0,056"] },
-    { "tokens": ["1", "tombstone", "black", "premium", "200", "90", "6", "0,108"] },
-    { "tokens": ["1", "backskirt", "black", "premium", "59", "9", "6", "0,003"] },
-    { "tokens": ["2", "sideskirts", "black", "premium", "147", "9", "6", "0,016"] },
-    { "tokens": ["1", "frontskirt", "black", "premium", "59", "9", "6", "0,003"] },
-    { "tokens": ["1", "flowerblock", "black", "premium", "15", "15", "15", "0,003"] },
-    { "tokens": ["2", "headstones", "indian", "aurora", "551058", "0,092"] },
-    { "tokens": ["1", "gardenkerb", "indian", "aurora", "10063,3-108", "0,051"] }
+    { "tokens": ["1", "column", "royal", "impala", "22", "75", "10-8", "0,017"] },
+    { "tokens": ["1", "headstone", "royal", "impala", "56", "87", "8", "0,039"] },
+    { "tokens": ["1", "tombstone", "left", "royal", "impala", "180", "25", "8", "0,036"] },
+    { "tokens": ["1", "tombstone", "right", "royal", "impala", "180", "57", "6", "0,062"] }
   ]
 }
 
-PDF TEXT (EXTRACT ALL ROWS):
+PDF TEXT - Extract all rows EXACTLY as tokens appear:
 ${text}
 `;
 

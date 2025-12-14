@@ -1,5 +1,3 @@
-
-
 const dotenv = require("dotenv");
 const flattenObject = require("./flattenObject");
 dotenv.config();
@@ -10,23 +8,42 @@ function unwindAndFlatten(record, arrayKey = "material_details") {
   const baseRecord = { ...record };
   delete baseRecord[arrayKey];
 
+  // Preserve order and client fields at the top level if they exist
+  const orderClientData = {};
+  if (record.order !== undefined) {
+    orderClientData.order = record.order;
+  }
+  if (record.client !== undefined) {
+    orderClientData.client = record.client;
+  }
+
   if (arrayToUnwind.length > 0) {
     arrayToUnwind.forEach((item, index) => {
       let unwoundRecord = { ...baseRecord };
 
       if (typeof item === "object" && item !== null) {
+        // Spread the item which already contains order and client from results.js
         unwoundRecord = { ...unwoundRecord, ...item };
       } else {
         unwoundRecord[`${arrayKey}_value_${index}`] = item;
       }
+
+      // Ensure order and client are included
+      unwoundRecord = { ...orderClientData, ...unwoundRecord };
+
       records.push(unwoundRecord);
     });
   } else {
-    records.push(baseRecord);
+    records.push({ ...baseRecord, ...orderClientData });
   }
 
   return records.flatMap((r) => {
     if (r.rows && Array.isArray(r.rows)) {
+      const orderClient = {
+        order: r.order,
+        client: r.client,
+      };
+
       return r.rows
         .map((row) => {
           const flatRow = { ...r };
@@ -42,16 +59,21 @@ function unwindAndFlatten(record, arrayKey = "material_details") {
         })
         .map((row) => {
           delete row.data;
-          return row;
+          return { ...orderClient, ...row };
         });
     }
 
     if (r.years && Array.isArray(r.years)) {
+      const orderClient = {
+        order: r.order,
+        client: r.client,
+      };
+
       return r.years.flatMap((yearData) => {
         return (yearData.data || []).map((item) => {
           const flatYear = { ...r };
           delete flatYear.years;
-          return { ...flatYear, year: yearData.year, ...item };
+          return { ...orderClient, ...flatYear, year: yearData.year, ...item };
         });
       });
     }
