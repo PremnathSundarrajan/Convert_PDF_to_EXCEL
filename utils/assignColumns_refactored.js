@@ -183,35 +183,44 @@ function assignColumns(tokens, order = "", client = "") {
  * - Enforces max digit length.
  */
 function normalizeDimensionToken(token, maxLength, isWidth = false) {
-    if (!token) return "";
+  if (!token) return "";
 
-    let normalized = String(token).trim().replace(/,/g, ".");
+  let normalized = String(token).trim().replace(/,/g, ".");
 
-    // OCR fix for width: if a 2-digit number has identical digits (e.g. 66), treat it as a single digit.
-    if (isWidth && /^\d{2}$/.test(normalized) && normalized[0] === normalized[1]) {
-        normalized = normalized[0];
+  // OCR fix for width: if a 2-digit number has identical digits (e.g. 66), treat it as a single digit.
+  if (isWidth && /^\d{2}$/.test(normalized) && normalized[0] === normalized[1]) {
+    normalized = normalized[0];
+  }
+
+  // Handle ranges: add spaces around dash
+  const rangeMatch = normalized.match(/^(\d{1,3}(?:\.\d+)?)-(\d{1,3}(?:\.\d+)?)$/);
+  if (rangeMatch) {
+    let part1 = rangeMatch[1];
+    if (!part1.includes(".")) {
+      part1 = part1.slice(0, maxLength);
     }
-    
-    // Handle ranges: add spaces around dash
-    const rangeMatch = normalized.match(/^(\d{1,3}(\.\d+)?)-(\d{1,3}(\.\d+)?)$/);
-    if (rangeMatch) {
-        const part1 = rangeMatch[1].slice(0, maxLength);
-        const part2 = rangeMatch[3].slice(0, maxLength);
-        return `${part1} - ${part2}`;
+    let part2 = rangeMatch[2];
+    if (!part2.includes(".")) {
+      part2 = part2.slice(0, maxLength);
     }
+    return `${part1} - ${part2}`;
+  }
 
-    // Handle single numbers
-    const numericMatch = normalized.match(/^\d+(\.\d+)?$/);
-    if (numericMatch) {
+  // Handle single numbers
+  const numericMatch = normalized.match(/^\d+(\.\d+)?$/);
+  if (numericMatch) {
+    if (!normalized.includes(".")) {
       return normalized.slice(0, maxLength);
     }
-    
-    // Fallback for simple ranges that may have failed the more specific regex
-    if (normalized.includes('-')) {
-        return normalized.replace(/-/g, ' - ');
-    }
-    
     return normalized;
+  }
+
+  // Fallback for simple ranges that may have failed the more specific regex
+  if (normalized.includes("-")) {
+    return normalized.replace(/-/g, " - ");
+  }
+
+  return normalized;
 }
 
 
@@ -242,9 +251,9 @@ function isNumericDimension(token) {
   if (!token) return false;
 
   // Strict regex for valid dimension formats.
-  // - Allows numbers (e.g., "180"), decimals ("63.3"), and ranges ("159-157", "63.3-10").
+  // - Allows numbers (e.g., "180"), decimals ("63.3" or "63,3"), and ranges ("159-157", "63,3-10").
   // - Enforces digit limits (1-3 for length/width, 1-2 for thick, but we check that later).
-  const dimensionRegex = /^\d{1,3}(\.\d+)?(-\d{1,3}(\.\d+)?)?$/;
+  const dimensionRegex = /^\d{1,3}([.,]\d+)?(-\d{1,3}([.,]\d+)?)?$/;
   return dimensionRegex.test(token);
 }
 
