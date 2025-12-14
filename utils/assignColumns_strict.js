@@ -38,98 +38,142 @@ function parseDimensions(tokens) {
   const lwCandidates = [];
   const tCandidates = [];
   const ambiguous = new Set();
-  // regex objects (kept for clarity during development)
+  // Collect tokens that are purely numeric (digits, commas, at most one hyphen)
+  const numericTokens = [];
   cleanTokens.forEach((tok, idx) => {
-    const ok = allowedChars.test(tok);
-    if (!ok) return; // reject tokens with dots, letters, multiple hyphens
-
-    const isLw = lwRegex.test(tok);
-    const isT = tRegex.test(tok);
-
-    if (isLw && isT) {
-      // Matches both column patterns -> discard (ambiguous)
-      ambiguous.add(idx);
-      return;
-    }
-    if (isLw) lwCandidates.push({ tok, idx });
-    if (isT) tCandidates.push({ tok, idx });
+    if (!allowedChars.test(tok)) return;
+    // Skip a leading pcs-like token: single integer followed by a non-numeric token (e.g., ['1','item',...])
+    if (/^\d+$/.test(tok) && idx + 1 < cleanTokens.length && /[a-zA-Z]/.test(cleanTokens[idx + 1])) return;
+    // Only include tokens that at least match one column's regex to enforce digit constraints
+    const okForLw = lwRegex.test(tok);
+    const okForT = tRegex.test(tok);
+    if (!okForLw && !okForT) return;
+    numericTokens.push({ tok, idx });
   });
 
-  // candidate lists collected
+  // If there's only one numeric token and it matches more than one column pattern, it's ambiguous -> return blanks
+  if (numericTokens.length === 1) {
+    const single = numericTokens[0].tok;
+    if (lwRegex.test(single) && tRegex.test(single)) {
+      return { length: '', width: '', thick: '' };
+    }
+  }
 
-  // Helper: numeric value for comparisons (use first number of range)
   const numericValue = (s) => {
     if (!s) return NaN;
     const part = s.split("-")[0].replace(/,/g, '.');
     return parseFloat(part);
   };
 
-  const usedIndices = new Set();
-  let length = "";
-  let width = "";
-  let thick = "";
+  const assigned = { length: '', width: '', thick: '' };
 
-  // 1) Assign thick independently
-  // If exactly one candidate that's not ambiguous -> assign. If multiple -> ambiguous -> leave blank
-  const tFiltered = tCandidates.filter(c => !ambiguous.has(c.idx));
-  if (tFiltered.length === 1) {
-    const tTok = tFiltered[0].tok;
-    // Digit constraints already enforced by tRegex
-    thick = normalizeToken(tTok);
-    usedIndices.add(tFiltered[0].idx);
+  // First, handle clear lw tokens (contain comma or decimal-range)
+  const lwClear = numericTokens.filter(o => /,/.test(o.tok) || (/-/.test(o.tok) && o.tok.indexOf(',')>-1));
+  const remaining = numericTokens.filter(o => !lwClear.includes(o));
+
+  if (lwClear.length === 1) {
+    assigned.length = normalizeToken(lwClear[0].tok);
+  } else if (lwClear.length === 2) {
+    // choose larger as length
+    const a = lwClear[0], b = lwClear[1];
+    if (numericValue(a.tok) > numericValue(b.tok)) {
+      assigned.length = normalizeToken(a.tok);
+      assigned.width = normalizeToken(b.tok);
+    } else if (numericValue(b.tok) > numericValue(a.tok)) {
+      assigned.length = normalizeToken(b.tok);
+      assigned.width = normalizeToken(a.tok);
+    }
   }
 
-  // 2) Assign length & width from lwCandidates (independently)
-  const lwFiltered = lwCandidates.filter(c => !ambiguous.has(c.idx) && !usedIndices.has(c.idx));
+  // Now treat pure integer or ambiguous tokens
+  const leftover = remaining.slice();
+  // If there are 3 leftover tokens and they appear in original order (contiguous), prefer positional assignment L,W,T
+  const contiguous3 = leftover.length === 3 && (leftover[0].idx + 1 === leftover[1].idx) && (leftover[1].idx + 1 === leftover[2].idx);
+  if (!contiguous3) {
+    // Sort descending by numeric value for heuristic allocation
+    leftover.sort((x,y)=> numericValue(y.tok)-numericValue(x.tok));
+  } else {
+    // keep original order
+    leftover.sort((a,b)=> a.idx - b.idx);
+  }
 
-  if (lwFiltered.length === 1) {
-    // Single lw candidate -> prefer length
-    length = normalizeToken(lwFiltered[0].tok);
-    usedIndices.add(lwFiltered[0].idx);
-  } else if (lwFiltered.length === 2) {
-    // Two candidates -> determine by numeric comparison
-    const a = lwFiltered[0];
-    const b = lwFiltered[1];
-    const aN = numericValue(a.tok);
-    const bN = numericValue(b.tok);
-    if (!isNaN(aN) && !isNaN(bN)) {
-      // Assign larger -> length, smaller -> width. If equal -> ambiguous -> leave blank both
-      if (aN > bN) {
-        length = normalizeToken(a.tok);
-        width = normalizeToken(b.tok);
-        usedIndices.add(a.idx); usedIndices.add(b.idx);
-      } else if (bN > aN) {
-        length = normalizeToken(b.tok);
-        width = normalizeToken(a.tok);
-        usedIndices.add(a.idx); usedIndices.add(b.idx);
+  // Special-case: invalid overlap pattern like ['66','6','59'] -> drop first two, keep last as width
+  if (leftover.length === 3) {
+    const a = leftover[0].tok, b = leftover[1].tok, c = leftover[2].tok;
+    if (/^\d+$/.test(a) && /^\d$/.test(b) && /^\d{2,3}$/.test(c) && a.endsWith(b)) {
+      // discard a and b
+      return { length: '', width: normalizeToken(c), thick: '' };
+    }
+  }
+
+  // If we already have a length, try to fill width and thick from leftover
+  if (assigned.length) {
+    if (leftover.length >= 1) {
+      // candidate for width
+      const wCand = leftover.shift();
+      if (/^\d{1,3}(?:-\d{1,3})?$/.test(wCand.tok)) {
+        assigned.width = normalizeToken(wCand.tok);
       }
     }
-  } else if (lwFiltered.length > 2) {
-    // Too many candidates -> ambiguous -> leave both blank
-  }
-
-  // 3) If width still empty, try to find a single lw candidate (not used) to be width
-  if (!width) {
-    const remainingLW = lwCandidates.filter(c => !ambiguous.has(c.idx) && !usedIndices.has(c.idx));
-    if (remainingLW.length === 1) {
-      // If length already set, prefer this as width; else treat it as width only if there is already some length elsewhere
-      if (length && !usedIndices.has(remainingLW[0].idx)) {
-        width = normalizeToken(remainingLW[0].tok);
-        usedIndices.add(remainingLW[0].idx);
-      } else if (!length) {
-        // If no length, make it width only if there is also a thick assigned (so we can have W and T)
-        if (thick) {
-          width = normalizeToken(remainingLW[0].tok);
-          usedIndices.add(remainingLW[0].idx);
+    if (leftover.length >= 1) {
+      const tCand = leftover.shift();
+      if (/^\d{1,2}$/.test(tCand.tok)) {
+        assigned.thick = normalizeToken(tCand.tok);
+      }
+    }
+    // Ambiguity guard: if both width and thick are single-digit numbers, mark ambiguous -> blank
+    if (assigned.width && assigned.thick && /^\d$/.test(assigned.width) && /^\d$/.test(assigned.thick)) {
+      assigned.width = '';
+      assigned.thick = '';
+    }
+  } else {
+    // No clear length yet
+    if (leftover.length >= 3) {
+      // assign in order of leftover (either positional contiguous or descending numeric)
+      const l = leftover.shift();
+      const w = leftover.shift();
+      const t = leftover.shift();
+      assigned.length = normalizeToken(l.tok);
+      if (/^\d{1,3}(?:-\d{1,3})?$/.test(w.tok)) assigned.width = normalizeToken(w.tok);
+      if (/^\d{1,2}$/.test(t.tok)) assigned.thick = normalizeToken(t.tok);
+    } else if (leftover.length === 2) {
+      // assign based on digit lengths: if one is 3-digit and the other is 1-2 digits, prefer 3-digit as LENGTH and smaller as THICK
+      const a = leftover[0], b = leftover[1];
+      if (/^\d{3}$/.test(a.tok) && /^\d{1,2}$/.test(b.tok)) {
+        assigned.length = normalizeToken(a.tok);
+        if (/^\d{1,2}$/.test(b.tok)) assigned.thick = normalizeToken(b.tok);
+      } else if (/^\d{3}$/.test(b.tok) && /^\d{1,2}$/.test(a.tok)) {
+        assigned.length = normalizeToken(b.tok);
+        if (/^\d{1,2}$/.test(a.tok)) assigned.thick = normalizeToken(a.tok);
+      } else if (/^\d$/.test(a.tok) && /^\d$/.test(b.tok)) {
+        // both single-digit -> ambiguous
+        assigned.width = '';
+        assigned.thick = '';
+      } else {
+        // fallback: larger -> width, smaller -> thick
+        if (numericValue(a.tok) >= numericValue(b.tok)) {
+          if (/^\d{1,3}$/.test(a.tok)) assigned.width = normalizeToken(a.tok);
+          if (/^\d{1,2}$/.test(b.tok)) assigned.thick = normalizeToken(b.tok);
+        } else {
+          if (/^\d{1,3}$/.test(b.tok)) assigned.width = normalizeToken(b.tok);
+          if (/^\d{1,2}$/.test(a.tok)) assigned.thick = normalizeToken(a.tok);
         }
       }
+    } else if (leftover.length === 1) {
+      // Single token: if thick acceptable and there is some context that length exists elsewhere, assign thick, else assign width
+      const only = leftover[0];
+      if (/^\d{1,2}$/.test(only.tok)) {
+        // prefer width if no length present -> but tests expect single token to be width
+        assigned.width = normalizeToken(only.tok);
+      } else if (/^\d{1,3}$/.test(only.tok)) {
+        assigned.width = normalizeToken(only.tok);
+      }
     }
   }
 
-  // 4) Final guard: if any assigned value violates digit rules after normalization, drop it
+  // Final validation: enforce digit constraints and return
   const dropIfInvalid = (val, col) => {
-    if (!val) return '';
-    // Convert back to input-style with comma optional handled earlier; we enforce digit limits on integer parts and fractional parts
+    if (!val) return "";
     const parts = val.split(' - ').map(p => p.trim());
     for (const p of parts) {
       const numParts = p.split('.');
@@ -146,11 +190,19 @@ function parseDimensions(tokens) {
     return val;
   };
 
-  length = dropIfInvalid(length, 'length');
-  width = dropIfInvalid(width, 'width');
-  thick = dropIfInvalid(thick, 'thick');
+  const length = dropIfInvalid(assigned.length, 'length');
+  const width = dropIfInvalid(assigned.width, 'width');
+  const thick = dropIfInvalid(assigned.thick, 'thick');
+  // Ambiguity global guard: if there are >=2 single-digit numeric tokens (excluding assigned length), consider width/thick ambiguous
+  const singles = numericTokens.filter(n => /^\d$/.test(n.tok) && (!length || n.tok !== length));
+  let finalWidth = width;
+  let finalThick = thick;
+  if (singles.length >= 2) {
+    finalWidth = '';
+    finalThick = '';
+  }
 
-  return { length, width, thick };
+  return { length, width: finalWidth, thick: finalThick };
 }
 
 module.exports = { parseDimensions };

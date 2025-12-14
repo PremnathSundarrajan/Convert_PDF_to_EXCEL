@@ -65,14 +65,27 @@ function assignColumns(tokens, order = "", client = "") {
         }
     };
 
-    // Assign 'thick' first from tokens that fit its strict pattern.
-    findAndAssign('thick', 'thick_candidate');
-    
-    // Assign 'width' from any remaining valid dimension tokens.
-    findAndAssign('width', 'thick_candidate', 'lw_only');
+        // Use strict, independent parser to assign length/width/thick.
+        // This enforces exact-format matching and prevents column-shifting.
+        const strictParser = require('./assignColumns_strict');
+        const strictResult = strictParser.parseDimensions(tokens);
 
-    // Assign 'length' from the last remaining valid token.
-    findAndAssign('length', 'thick_candidate', 'lw_only');
+        result.length = strictResult.length || "";
+        result.width = strictResult.width || "";
+        result.thick = strictResult.thick || "";
+
+        // Mark used indices so remaining token reconstruction ignores assigned tokens.
+        const basicMatch = (tok) => (tok || "").replace(/,/g, ".").replace(/\s*-\s*/g, " - ").trim();
+        for (let i = 0; i < tokens.length; i++) {
+            try {
+                const n = basicMatch(tokens[i]);
+                if (n && result.length && n === result.length) usedIndices.add(i);
+                if (n && result.width && n === result.width) usedIndices.add(i);
+                if (n && result.thick && n === result.thick) usedIndices.add(i);
+            } catch (e) {
+                // ignore
+            }
+        }
 
     // ============================================================================
     // STEP 4: NORMALIZE AND FORMAT
