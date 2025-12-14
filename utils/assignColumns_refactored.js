@@ -164,9 +164,9 @@ function assignColumns(tokens, order = "", client = "") {
     pcs: pcs || "",
     item: item || "",
     material: material || "",
-    length: formatDimension(length) || "",
-    width: formatDimension(width) || "",
-    thick: formatDimension(thick) || "",
+    length: normalizeDimensionToken(length, 3) || "",
+    width: normalizeDimensionToken(width, 3, true) || "",
+    thick: normalizeDimensionToken(thick, 2) || "",
     m3: m3 || "",
   };
 }
@@ -176,15 +176,44 @@ function assignColumns(tokens, order = "", client = "") {
 // ============================================================================
 
 /**
- * Format dimension value for output
- * Adds spaces around hyphens in ranges: "159-157" → "159 - 157"
- * Preserves decimal format: "63.3" stays "63.3"
+ * Normalizes a dimension token for output.
+ * - Replaces commas with dots.
+ * - Adds spaces around hyphens in ranges.
+ * - Corrects OCR duplication for single-digit widths (e.g., '66' -> '6').
+ * - Enforces max digit length.
  */
-function formatDimension(value) {
-  if (!value) return value;
-  // Add spaces around hyphen in ranges
-  return String(value).replace(/(\d)-(\d)/g, "$1 - $2");
+function normalizeDimensionToken(token, maxLength, isWidth = false) {
+    if (!token) return "";
+
+    let normalized = String(token).trim().replace(/,/g, ".");
+
+    // OCR fix for width: if a 2-digit number has identical digits (e.g. 66), treat it as a single digit.
+    if (isWidth && /^\d{2}$/.test(normalized) && normalized[0] === normalized[1]) {
+        normalized = normalized[0];
+    }
+    
+    // Handle ranges: add spaces around dash
+    const rangeMatch = normalized.match(/^(\d{1,3}(\.\d+)?)-(\d{1,3}(\.\d+)?)$/);
+    if (rangeMatch) {
+        const part1 = rangeMatch[1].slice(0, maxLength);
+        const part2 = rangeMatch[3].slice(0, maxLength);
+        return `${part1} - ${part2}`;
+    }
+
+    // Handle single numbers
+    const numericMatch = normalized.match(/^\d+(\.\d+)?$/);
+    if (numericMatch) {
+      return normalized.slice(0, maxLength);
+    }
+    
+    // Fallback for simple ranges that may have failed the more specific regex
+    if (normalized.includes('-')) {
+        return normalized.replace(/-/g, ' - ');
+    }
+    
+    return normalized;
 }
+
 
 /**
  * Check if token is PCS (pieces): 1-2 digit integer, 1-99 range
@@ -212,19 +241,11 @@ function isDecimal(token) {
 function isNumericDimension(token) {
   if (!token) return false;
 
-  // Simple: 1-3 digits (covering both thin and length/width)
-  if (/^\d{1,3}$/.test(token)) return true;
-
-  // Range: N-N format (e.g., "159-157", "10-8")
-  if (/^\d{1,3}-\d{1,3}$/.test(token)) return true;
-
-  // Decimal: N.N format (e.g., "63.3")
-  if (/^\d{1,3}\.\d+$/.test(token)) return true;
-
-  // Decimal range: N.N-N format (e.g., "63.3-10")
-  if (/^\d{1,3}\.\d+-\d{1,3}$/.test(token)) return true;
-
-  return false;
+  // Strict regex for valid dimension formats.
+  // - Allows numbers (e.g., "180"), decimals ("63.3"), and ranges ("159-157", "63.3-10").
+  // - Enforces digit limits (1-3 for length/width, 1-2 for thick, but we check that later).
+  const dimensionRegex = /^\d{1,3}(\.\d+)?(-\d{1,3}(\.\d+)?)?$/;
+  return dimensionRegex.test(token);
 }
 
 // ============================================================================
