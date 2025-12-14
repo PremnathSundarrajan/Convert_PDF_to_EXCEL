@@ -7,45 +7,55 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Post-extraction validation: detect merged numeric tokens and split them intelligently
 function validateAndSplitMergedTokens(data) {
-  // New strict parsing logic per user requirements:
-  // - Do NOT merge or concatenate numeric tokens
-  // - Tokenize by whitespace (tokens already provided)
-  // - Identify numeric tokens (integers, decimals, ranges)
-  // - Assign dimensions from RIGHT->LEFT: thick (rightmost), width (second-right), length (third-right)
-  // - Do not shift or infer; on validation failure, leave field empty
+  const normalize = (v) => {
+    if (v === null || v === undefined) return "";
+    let s = String(v).trim();
+    s = s.replace(/,/g, ".");
+    s = s.replace(/\s*-\s*/g, " - ");
+    return s;
+  };
+
+  const isZero = (val) => {
+    if (val === null || val === undefined) return false;
+    const s = String(val).trim().replace(/,/g, '.');
+    return parseFloat(s) === 0;
+  }
+
+  const isValidThickness = (s) => {
+    if (!s || isZero(s)) return false;
+    if (s.includes("-")) {
+      const parts = s.split("-").map((p) => p.trim());
+      return parts.every((p) => /^\d{1,2}$/.test(p) && !isZero(p));
+    }
+    return /^\d{1,2}$/.test(s);
+  };
+
+  const isValidLengthWidth = (s) => {
+    if (!s || isZero(s)) return false;
+    if (s.includes("-")) {
+      const parts = s.split("-").map((p) => p.trim());
+      return parts.every((p) => /^\d{1,3}$/.test(p) && !isZero(p));
+    }
+    if (/^[\d.]+$/.test(s)) {
+      const clean = s.replace(/\./g, "");
+      return /^\d{1,3}$/.test(clean) && !isZero(s);
+    }
+    return false;
+  };
+  
+  const isM3 = (t) => /^0[.,]\d+$/i.test(String(t).trim()) && !isZero(t);
+  const isPCS = (t) => /^\d{1,2}$/.test(String(t).trim()) && !isZero(t);
+  const isNumericCandidate = (t) => {
+    if (t === null || t === undefined || isZero(t)) return false;
+    const s = String(t).trim();
+    if (/^\d+$/.test(s)) return true; // integer
+    if (/^\d+[.,]\d+$/.test(s)) return true; // decimal
+    if (/^\d+\s*-\s*\d+$/.test(s)) return true; // range
+    return false;
+  };
 
   // Handle material_details (direct LLM extraction) -> normalize & validate only
   if (data.material_details && Array.isArray(data.material_details)) {
-    const normalize = (v) => {
-      if (v === null || v === undefined) return "";
-      let s = String(v).trim();
-      s = s.replace(/,/g, ".");
-      s = s.replace(/\s*-\s*/g, " - ");
-      return s;
-    };
-
-    const isValidThickness = (s) => {
-      if (!s) return false;
-      if (s.includes("-")) {
-        const parts = s.split("-").map((p) => p.trim());
-        return parts.every((p) => /^\d{1,2}$/.test(p));
-      }
-      return /^\d{1,2}$/.test(s);
-    };
-
-    const isValidLengthWidth = (s) => {
-      if (!s) return false;
-      if (s.includes("-")) {
-        const parts = s.split("-").map((p) => p.trim());
-        return parts.every((p) => /^\d{1,3}$/.test(p));
-      }
-      if (/^[\d.]+$/.test(s)) {
-        const clean = s.replace(/\./g, "");
-        return /^\d{1,3}$/.test(clean);
-      }
-      return false;
-    };
-
     data.material_details = data.material_details.map((row) => {
       row.length = normalize(row.length);
       row.width = normalize(row.width);
@@ -55,8 +65,11 @@ function validateAndSplitMergedTokens(data) {
       if (!isValidLengthWidth(row.width)) row.width = "";
       if (!isValidThickness(row.thick)) row.thick = "";
 
+      if (!row.length || !row.width || !row.thick || !row.pcs || !row.item || !row.material || !row.m3) return null;
+      if (isZero(row.pcs) || isZero(row.m3)) return null;
+
       return row;
-    });
+    }).filter(Boolean);
 
     return data;
   }
@@ -64,51 +77,14 @@ function validateAndSplitMergedTokens(data) {
   // Handle rows/tokens format
   if (!data.rows || !Array.isArray(data.rows)) return data;
 
-  const isM3 = (t) => /^0[.,]\d+$/i.test(String(t).trim());
-  const isPCS = (t) => /^\d{1,2}$/.test(String(t).trim());
-  const isNumericCandidate = (t) => {
-    if (t === null || t === undefined) return false;
-    const s = String(t).trim();
-    if (/^\d+$/.test(s)) return true; // integer
-    if (/^\d+[.,]\d+$/.test(s)) return true; // decimal
-    if (/^\d+\s*-\s*\d+$/.test(s)) return true; // range
-    return false;
-  };
-
-  const normalize = (s) => {
-    if (s === null || s === undefined) return "";
-    return String(s).trim().replace(/,/g, ".").replace(/\s*-\s*/g, " - ");
-  };
-
-  const validateThickness = (s) => {
-    if (!s) return false;
-    if (s.includes("-")) {
-      return s.split("-").map((p) => p.trim()).every((p) => /^\d{1,2}$/.test(p));
-    }
-    return /^\d{1,2}$/.test(s);
-  };
-
-  const validateLengthWidth = (s) => {
-    if (!s) return false;
-    if (s.includes("-")) {
-      return s.split("-").map((p) => p.trim()).every((p) => /^\d{1,3}$/.test(p));
-    }
-    // decimals allowed
-    if (/^[\d.]+$/.test(s)) {
-      return /^\d{1,3}$/.test(s.replace(/\./g, ""));
-    }
-    return false;
-  };
-
   data.rows = data.rows.map((row) => {
-    if (!row.tokens || !Array.isArray(row.tokens)) return row;
+    if (!row.tokens || !Array.isArray(row.tokens) || row.tokens.some(t => t === null || t === undefined || t === '')) return null;
 
-    const tokens = row.tokens.map((t) => (t === null || t === undefined ? "" : String(t).trim()));
+    const tokens = row.tokens.map((t) => String(t).trim());
 
-    // Identify pcs (exclude if first token is 1-2 digit integer)
     const pcsIndex = tokens.length > 0 && isPCS(tokens[0]) ? 0 : -1;
+    if (pcsIndex === -1) return null;
 
-    // Identify m3 (last token matching m3 pattern)
     let m3Index = -1;
     for (let i = tokens.length - 1; i >= 0; i--) {
       if (isM3(tokens[i])) {
@@ -116,8 +92,8 @@ function validateAndSplitMergedTokens(data) {
         break;
       }
     }
+    if (m3Index === -1) return null;
 
-    // Collect numeric candidates excluding pcs and m3
     const numericCandidates = [];
     for (let i = 0; i < tokens.length; i++) {
       if (i === pcsIndex) continue;
@@ -125,7 +101,6 @@ function validateAndSplitMergedTokens(data) {
       if (isNumericCandidate(tokens[i])) numericCandidates.push(tokens[i]);
     }
 
-    // Assign per rules: process RIGHT->LEFT. If more than 3 candidates, use the last three.
     const assign = { length: "", width: "", thick: "" };
     const n = numericCandidates.length;
     if (n === 1) {
@@ -140,13 +115,12 @@ function validateAndSplitMergedTokens(data) {
       assign.thick = normalize(lastThree[2]);
     }
 
-    // Validate, fail-fast by clearing invalid fields (do NOT shift)
-    if (assign.thick && !validateThickness(assign.thick)) assign.thick = "";
-    if (assign.width && !validateLengthWidth(assign.width)) assign.width = "";
-    if (assign.length && !validateLengthWidth(assign.length)) assign.length = "";
+    if (!validateThickness(assign.thick)) return null;
+    if (!validateLengthWidth(assign.width)) return null;
+    if (!validateLengthWidth(assign.length)) return null;
 
     return { ...row, parsed_dimensions: assign };
-  });
+  }).filter(Boolean);
 
   return data;
 }
@@ -192,6 +166,8 @@ If either field is missing, set to null
 ═══════════════════════════════════════════════════════════════════
 PART 2: TABLE ROW EXTRACTION - COLUMN-BY-COLUMN SPECIFICATIONS
 ═══════════════════════════════════════════════════════════════════
+
+**CRITICAL RULE: No field in any row can be empty, null, or have a value of 0. If a value is missing or invalid according to the column specifications, you MUST discard the entire row and not include it in the JSON output.**
 
 Each material row has EXACTLY 7 columns (in this order):
 
