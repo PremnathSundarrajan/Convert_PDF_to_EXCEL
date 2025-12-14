@@ -32,7 +32,13 @@ function assignColumns(tokens, order = "", client = "") {
   }
 
   // Normalize: trim and replace commas with dots
-  const normalized = tokens.map((t) => String(t).trim().replace(/,/g, "."));
+  // NOTE: Don't add spaces yet - we need clean tokens for validation
+  const normalized = tokens.map((t) => {
+    let token = String(t).trim();
+    // Replace commas with dots (for decimal notation: 63,3 → 63.3)
+    token = token.replace(/,/g, ".");
+    return token;
+  });
 
   // ============================================================================
   // STEP 2: EXTRACT M3 (MUST BE LAST, DECIMAL FORMAT)
@@ -158,9 +164,9 @@ function assignColumns(tokens, order = "", client = "") {
     pcs: pcs || "",
     item: item || "",
     material: material || "",
-    length: length || "",
-    width: width || "",
-    thick: thick || "",
+    length: formatDimension(length) || "",
+    width: formatDimension(width) || "",
+    thick: formatDimension(thick) || "",
     m3: m3 || "",
   };
 }
@@ -168,6 +174,17 @@ function assignColumns(tokens, order = "", client = "") {
 // ============================================================================
 // HELPER VALIDATORS
 // ============================================================================
+
+/**
+ * Format dimension value for output
+ * Adds spaces around hyphens in ranges: "159-157" → "159 - 157"
+ * Preserves decimal format: "63.3" stays "63.3"
+ */
+function formatDimension(value) {
+  if (!value) return value;
+  // Add spaces around hyphen in ranges
+  return String(value).replace(/(\d)-(\d)/g, "$1 - $2");
+}
 
 /**
  * Check if token is PCS (pieces): 1-2 digit integer, 1-99 range

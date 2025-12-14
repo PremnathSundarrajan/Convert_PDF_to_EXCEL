@@ -7,6 +7,19 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Post-extraction validation: detect merged numeric tokens and split them intelligently
 function validateAndSplitMergedTokens(data) {
+  // Handle new format with material_details (direct LLM extraction)
+  if (data.material_details && Array.isArray(data.material_details)) {
+    data.material_details = data.material_details.map((row) => {
+      // Validate and fix dimension columns
+      row.length = fixMergedDimensionValue(row.length);
+      row.width = fixMergedDimensionValue(row.width);
+      row.thick = fixMergedDimensionValue(row.thick);
+      return row;
+    });
+    return data;
+  }
+
+  // Handle old format with rows/tokens
   if (!data.rows || !Array.isArray(data.rows)) return data;
 
   data.rows = data.rows.map((row) => {
@@ -123,6 +136,36 @@ function validateAndSplitMergedTokens(data) {
   return data;
 }
 
+/**
+ * Fix merged dimension values in material_details format (new LLM format)
+ * Example: width="66" might be merged from 6+6
+ * This function detects and splits suspicious 2-digit values
+ */
+function fixMergedDimensionValue(value) {
+  if (!value) return value;
+
+  const str = String(value).trim();
+
+  // Only process 2-digit numeric values (not ranges or decimals)
+  if (!/^\d{2}$/.test(str)) {
+    return value;
+  }
+
+  const [d1, d2] = str.split("");
+
+  // Pattern: Both digits identical (66, 77, 88, etc.)
+  // This typically indicates merged width + thickness
+  if (d1 === d2) {
+    const digit = parseInt(d1);
+    // If both are valid single digits (1-9), take the first one
+    if (digit >= 1 && digit <= 9) {
+      return d1; // "66" → "6", "77" → "7", etc.
+    }
+  }
+
+  return value;
+}
+
 async function extractJsonFromPDF(text) {
   const system =
     "You are a precision JSON extraction specialist. Your task is CRITICAL and ACCURACY IS PARAMOUNT. Return ONLY valid JSON. No markdown. No explanations. No comments. Each dimension value MUST be in a separate token. Column values must NEVER be merged. Validate every token against strict column specifications.";
@@ -201,18 +244,19 @@ COLUMN SPECIFICATIONS (STRICT REQUIREMENTS):
   - ❌ WRONG: "2275" (merged length+width), "56-87" (this is width+thick pattern)
 
 [COLUMN 5] WIDTH (dimension):
-  - Type: NUMERIC or RANGE
+  - Type: NUMERIC, DECIMAL, or RANGE
   - Format:
     * Simple: 1-3 digits (9, 15, 30, 62, 87, 90, 106, etc.)
     * Decimal: X,YYY format (63,3 meaning 63.3, etc.)
     * Range: N-N format (59-57, 90-85, etc.)
+    * Decimal Range: X,YYY-N format (63,3-10 meaning 63.3-10, 30,5-25 meaning 30.5-25, etc.) ← IMPORTANT!
   - Digit Limits:
     * Minimum: 6
     * Maximum: 200
     * Can have comma decimal (60,026 = 60.026)
-  - Rules: Fourth numeric value in row. ALWAYS separate from length and thickness.
-  - Examples: "9", "15", "25", "30", "62", "75", "87", "90", "63,3", "59-57"
-  - ❌ WRONG: "2275" (merged from length), "759" (merged width+thickness)
+  - Rules: Fourth numeric value in row. ALWAYS separate from length and thickness. Range values stay together with hyphen.
+  - Examples: "9", "15", "25", "30", "62", "75", "87", "90", "63,3", "59-57", "63,3-10", "30,5-25"
+  - ❌ WRONG: "2275" (merged from length), "759" (merged width+thickness), "63,3" + "10" (split - should be "63,3-10")
 
 [COLUMN 6] THICKNESS (dimension):
   - Type: NUMERIC or RANGE (rarely)

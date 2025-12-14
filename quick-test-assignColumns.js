@@ -22,7 +22,7 @@ const tests = [
       material: "royal impala",
       length: "22",
       width: "75",
-      thick: "10-8",
+      thick: "10 - 8",
       m3: "0.017",
     },
   },
