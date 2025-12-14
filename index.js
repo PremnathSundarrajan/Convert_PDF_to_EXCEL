@@ -17,7 +17,8 @@ app.use(
 
 let dataJSON = null;
 
-app.post("/convert", upload.array("pdfs"), convert);
+app.post("/convert", upload.array("pdfs"), convert.convert);
+app.post("/convert-debug", upload.array("pdfs"), convert.convertDebug);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

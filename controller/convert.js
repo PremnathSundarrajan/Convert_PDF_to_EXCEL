@@ -14,6 +14,10 @@ const convert = async (req, res) => {
     }
 
     const results = await resultsFunc(req);
+    // Debug: print raw results from resultsFunc for inspection
+    console.log('----- RAW_RESULTS_FROM_RESULTS_FUNC_START -----');
+    try { console.log(JSON.stringify(results, null, 2)); } catch (e) { console.log(results); }
+    console.log('----- RAW_RESULTS_FROM_RESULTS_FUNC_END -----');
     console.log("=== RESULTS FROM resultsFunc ===");
     console.log(JSON.stringify(results, null, 2).slice(0, 1000));
 
@@ -44,6 +48,35 @@ const convert = async (req, res) => {
         combinedRows.push({});
       }
     });
+
+    // Gated debug dump: write the exact combinedRows that will be converted to Excel
+    // Use environment variable WRITE_DEBUG_COMBINED=1 to enable (safe for local debugging)
+    try {
+      const writeDebug = String(process.env.WRITE_DEBUG_COMBINED || "").toLowerCase();
+      if (writeDebug === "1" || writeDebug === "true") {
+        const debugPath = path.join(__dirname, "debug-combinedRows.json");
+        fs.writeFileSync(debugPath, JSON.stringify(combinedRows, null, 2), "utf8");
+        console.log(`Debug: wrote combined rows to ${debugPath}`);
+      }
+    } catch (e) {
+      console.warn("Failed to write debug combined rows:", e.message);
+    }
+    // If debug enabled, also print the full JSON to console between clear markers
+    try {
+      const writeDebug = String(process.env.WRITE_DEBUG_COMBINED || "").toLowerCase();
+      if (writeDebug === "1" || writeDebug === "true") {
+        console.log("----- DEBUG_COMBINED_ROWS_JSON_START -----");
+        try {
+          console.log(JSON.stringify(combinedRows, null, 2));
+        } catch (e) {
+          // Fallback: print a compact version if the pretty-print fails
+          console.log(JSON.stringify(combinedRows));
+        }
+        console.log("----- DEBUG_COMBINED_ROWS_JSON_END -----");
+      }
+    } catch (e) {
+      // keep moving
+    }
 
     const workbook = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(combinedRows);
@@ -137,4 +170,50 @@ const convert = async (req, res) => {
   }
 };
 
-module.exports = convert;
+const convertDebug = async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No files uploaded" });
+    }
+
+    const results = await resultsFunc(req);
+    const allValidJson = results.filter((r) => r && r.success !== false);
+    if (!allValidJson.length) {
+      return res.status(500).json({ success: false, error: "No valid data extracted" });
+    }
+
+    let combinedRows = [];
+    allValidJson.forEach((fileData, index) => {
+      let rows = [];
+      if (fileData.material_details) {
+        rows = unwindAndFlatten(fileData);
+      } else {
+        rows = [flattenObject(fileData)];
+      }
+      combinedRows.push(...rows);
+      if (index < allValidJson.length - 1) combinedRows.push({});
+    });
+
+    // write debug file
+    try {
+      const debugPath = path.join(__dirname, "debug-combinedRows.json");
+      fs.writeFileSync(debugPath, JSON.stringify(combinedRows, null, 2), "utf8");
+      console.log(`Debug: wrote combined rows to ${debugPath}`);
+    } catch (e) {
+      console.warn("Failed to write debug combined rows:", e.message);
+    }
+
+    // Also print JSON markers for easy copying
+    console.log("----- DEBUG_COMBINED_ROWS_JSON_START -----");
+    try { console.log(JSON.stringify(combinedRows, null, 2)); } catch (e) { console.log(JSON.stringify(combinedRows)); }
+    console.log("----- DEBUG_COMBINED_ROWS_JSON_END -----");
+
+    return res.json({ success: true, count: combinedRows.length, combinedRows });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+module.exports = { convert, convertDebug };

@@ -9,6 +9,57 @@ const pdfParse = require("pdf-parse");
 
 const NOTE_WORDS = new Set(["with", "punched", "line"]);
 
+// Sanitize material_details rows returned directly by LLM
+// Fix common merged width+thick cases where width may contain thick appended
+function sanitizeMaterialDetails(rows) {
+  return rows.map((r) => {
+    const row = { ...r };
+    // Normalize numeric strings for checks
+    const widthRaw = row.width ? String(row.width).trim() : '';
+    const thickRaw = row.thick ? String(row.thick).trim() : '';
+
+    // If thick missing but width looks like merged W+T (digits only), try split
+    if ((!thickRaw || thickRaw === '') && /^\d{2,4}$/.test(widthRaw)) {
+      const digits = widthRaw.replace(/\D/g, '');
+      // Try last 1 digit as thick
+      const cThick1 = digits.slice(-1);
+      const cWidth1 = digits.slice(0, -1);
+      if (cWidth1.length >= 1 && cWidth1.length <= 3 && /^\d{1,3}$/.test(cWidth1) && /^\d{1,2}$/.test(cThick1)) {
+        // Thick must be between 1 and 99 and width >=6 (business rule)
+        const thickVal = parseInt(cThick1, 10);
+        const widthVal = parseInt(cWidth1, 10);
+        if (thickVal >= 1 && thickVal <= 99 && widthVal >= 1) {
+          row.width = cWidth1;
+          row.thick = cThick1;
+          return row;
+        }
+      }
+
+      // Try last 2 digits as thick
+      const cThick2 = digits.slice(-2);
+      const cWidth2 = digits.slice(0, -2);
+      if (cWidth2.length >= 1 && cWidth2.length <= 3 && /^\d{1,3}$/.test(cWidth2) && /^\d{1,2}$/.test(cThick2)) {
+        const thickVal = parseInt(cThick2, 10);
+        const widthVal = parseInt(cWidth2, 10);
+        if (thickVal >= 1 && thickVal <= 99 && widthVal >= 1) {
+          row.width = cWidth2;
+          row.thick = cThick2;
+          return row;
+        }
+      }
+    }
+
+    // If both present and it looks like width duplicated e.g., width='66' thick='6' -> shrink width
+    if (widthRaw && thickRaw && /^\d{2}$/.test(widthRaw) && /^\d{1,2}$/.test(thickRaw)) {
+      if (widthRaw.endsWith(thickRaw) && widthRaw.length === thickRaw.length + 1) {
+        row.width = widthRaw.slice(0, widthRaw.length - thickRaw.length);
+      }
+    }
+
+    return row;
+  });
+}
+
 const resultsFunc = async (req) => {
   return await Promise.all(
     req.files.map(async (file) => {
@@ -47,7 +98,10 @@ const resultsFunc = async (req) => {
             ...row,
             order: order,
             client: client,
+            _debug_raw_row: row,
           }));
+          // NOTE: do NOT apply heuristic splitting here. `extractJsonFromPDF` now returns
+          // normalized and validated values and rows may include `parsed_dimensions` for strict cases.
         } else if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
           // Old Prompt Format (Tokens -> assignColumns manual logic)
           // Remove note words ONLY
@@ -59,11 +113,61 @@ const resultsFunc = async (req) => {
 
           for (const r of parsed.rows) {
             try {
-              const result = assignColumns(r.tokens, order, client);
-              parsed.material_details.push(result);
-              console.log(
-                `✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`
-              );
+              // If `parsed_dimensions` is available (produced by extractJsonFromPDF), use it strictly.
+              if (r.parsed_dimensions) {
+                const pd = r.parsed_dimensions;
+                // Reconstruct pcs and m3 and textual item/material without altering token order
+                const toks = r.tokens.map(t => String(t).trim());
+                // pcs is first token if 1-2 digit integer
+                const pcs = (toks.length > 0 && /^\d{1,2}$/.test(toks[0])) ? toks[0] : "";
+                // find m3 index
+                let m3 = "";
+                if (toks.length > 0 && /^0[.,]\d+$/.test(toks[toks.length-1])) {
+                  m3 = toks[toks.length-1];
+                }
+
+                // find first numeric token index (exclude pcs and m3)
+                const startIdx = pcs ? 1 : 0;
+                let firstNumIdx = toks.length;
+                for (let i = startIdx; i < toks.length; i++) {
+                  if (i === toks.length -1 && m3) break; // don't consider m3
+                  const s = toks[i];
+                  if (/^\d+(?:[.,]\d+)?(?:\s*-\s*\d+(?:[.,]\d+)?)?$/.test(s)) { firstNumIdx = i; break; }
+                }
+
+                const itemMaterialTokens = toks.slice(startIdx, firstNumIdx);
+                let item = "";
+                let material = "";
+                if (itemMaterialTokens.length > 0) {
+                  item = itemMaterialTokens[0];
+                  if (itemMaterialTokens.length > 1) material = itemMaterialTokens.slice(1).join(' ');
+                }
+
+                const result = {
+                  order: order || "",
+                  client: client || "",
+                  pcs: pcs,
+                  item: item || "",
+                  material: material || "",
+                  length: pd.length || "",
+                  width: pd.width || "",
+                  thick: pd.thick || "",
+                  m3: m3 || "",
+                _debug_parsed_dimensions: pd,
+                _debug_tokens: toks,
+                };
+
+                parsed.material_details.push(result);
+                console.log(`✅ Row OK (strict): ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`);
+              } else {
+                const result = assignColumns(r.tokens, order, client);
+                // include debug info from assignColumns
+                result._debug_tokens = r.tokens;
+                parsed.material_details.push(result);
+                console.log(
+                  `✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`
+                );
+              }
             } catch (e) {
               console.warn("❌ Row skipped - Reason:", e.message);
               console.warn("   Tokens were:", JSON.stringify(r.tokens));

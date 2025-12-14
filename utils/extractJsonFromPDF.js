@@ -7,130 +7,145 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Post-extraction validation: detect merged numeric tokens and split them intelligently
 function validateAndSplitMergedTokens(data) {
-  // Handle new format with material_details (direct LLM extraction)
+  // New strict parsing logic per user requirements:
+  // - Do NOT merge or concatenate numeric tokens
+  // - Tokenize by whitespace (tokens already provided)
+  // - Identify numeric tokens (integers, decimals, ranges)
+  // - Assign dimensions from RIGHT->LEFT: thick (rightmost), width (second-right), length (third-right)
+  // - Do not shift or infer; on validation failure, leave field empty
+
+  // Handle material_details (direct LLM extraction) -> normalize & validate only
   if (data.material_details && Array.isArray(data.material_details)) {
+    const normalize = (v) => {
+      if (v === null || v === undefined) return "";
+      let s = String(v).trim();
+      s = s.replace(/,/g, ".");
+      s = s.replace(/\s*-\s*/g, " - ");
+      return s;
+    };
+
+    const isValidThickness = (s) => {
+      if (!s) return false;
+      if (s.includes("-")) {
+        const parts = s.split("-").map((p) => p.trim());
+        return parts.every((p) => /^\d{1,2}$/.test(p));
+      }
+      return /^\d{1,2}$/.test(s);
+    };
+
+    const isValidLengthWidth = (s) => {
+      if (!s) return false;
+      if (s.includes("-")) {
+        const parts = s.split("-").map((p) => p.trim());
+        return parts.every((p) => /^\d{1,3}$/.test(p));
+      }
+      if (/^[\d.]+$/.test(s)) {
+        const clean = s.replace(/\./g, "");
+        return /^\d{1,3}$/.test(clean);
+      }
+      return false;
+    };
+
     data.material_details = data.material_details.map((row) => {
-      // Validate and fix dimension columns
-      row.length = fixMergedDimensionValue(row.length);
-      row.width = fixMergedDimensionValue(row.width);
-      row.thick = fixMergedDimensionValue(row.thick);
+      row.length = normalize(row.length);
+      row.width = normalize(row.width);
+      row.thick = normalize(row.thick);
+
+      if (!isValidLengthWidth(row.length)) row.length = "";
+      if (!isValidLengthWidth(row.width)) row.width = "";
+      if (!isValidThickness(row.thick)) row.thick = "";
+
       return row;
     });
+
     return data;
   }
 
-  // Handle old format with rows/tokens
+  // Handle rows/tokens format
   if (!data.rows || !Array.isArray(data.rows)) return data;
+
+  const isM3 = (t) => /^0[.,]\d+$/i.test(String(t).trim());
+  const isPCS = (t) => /^\d{1,2}$/.test(String(t).trim());
+  const isNumericCandidate = (t) => {
+    if (t === null || t === undefined) return false;
+    const s = String(t).trim();
+    if (/^\d+$/.test(s)) return true; // integer
+    if (/^\d+[.,]\d+$/.test(s)) return true; // decimal
+    if (/^\d+\s*-\s*\d+$/.test(s)) return true; // range
+    return false;
+  };
+
+  const normalize = (s) => {
+    if (s === null || s === undefined) return "";
+    return String(s).trim().replace(/,/g, ".").replace(/\s*-\s*/g, " - ");
+  };
+
+  const validateThickness = (s) => {
+    if (!s) return false;
+    if (s.includes("-")) {
+      return s.split("-").map((p) => p.trim()).every((p) => /^\d{1,2}$/.test(p));
+    }
+    return /^\d{1,2}$/.test(s);
+  };
+
+  const validateLengthWidth = (s) => {
+    if (!s) return false;
+    if (s.includes("-")) {
+      return s.split("-").map((p) => p.trim()).every((p) => /^\d{1,3}$/.test(p));
+    }
+    // decimals allowed
+    if (/^[\d.]+$/.test(s)) {
+      return /^\d{1,3}$/.test(s.replace(/\./g, ""));
+    }
+    return false;
+  };
 
   data.rows = data.rows.map((row) => {
     if (!row.tokens || !Array.isArray(row.tokens)) return row;
 
-    const validated = [];
-    for (let i = 0; i < row.tokens.length; i++) {
-      const token = String(row.tokens[i]).trim();
+    const tokens = row.tokens.map((t) => (t === null || t === undefined ? "" : String(t).trim()));
 
-      // Skip text tokens (item, material names)
-      if (!/^[\d,.\-]+$/.test(token)) {
-        validated.push(token);
-        continue;
+    // Identify pcs (exclude if first token is 1-2 digit integer)
+    const pcsIndex = tokens.length > 0 && isPCS(tokens[0]) ? 0 : -1;
+
+    // Identify m3 (last token matching m3 pattern)
+    let m3Index = -1;
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      if (isM3(tokens[i])) {
+        m3Index = i;
+        break;
       }
-
-      // Skip ranges and decimals (these are valid single tokens)
-      if (token.includes("-") || token.includes(",")) {
-        validated.push(token);
-        continue;
-      }
-
-      // Check if numeric token looks like merged columns
-      // Pattern 1: 5+ consecutive digits (e.g., "5957" from 59+57, "20090" from 200+90)
-      if (/^\d{5,}$/.test(token)) {
-        // Try to split with multiple patterns for common dimension column sizes
-        const patterns = [
-          /^(\d{2,3})(\d{2})(\d{1})$/, // e.g., "59601" → 59,60,1
-          /^(\d{2,3})(\d{2})(\d{2})$/, // e.g., "596015" → 59,60,15
-          /^(\d{2,3})(\d{1})(\d{1,2})$/, // e.g., "596" → 59,6
-          /^(\d{3})(\d{2})(\d{2})$/, // e.g., "200906" → 200,90,6
-        ];
-
-        let matched = false;
-        for (const pattern of patterns) {
-          const m = token.match(pattern);
-          if (m) {
-            validated.push(m[1], m[2], m[3]);
-            matched = true;
-            break;
-          }
-        }
-
-        if (!matched) {
-          // Fallback: try 2-3 + rest
-          const m = token.match(/^(\d{2,3})(\d{2,})$/);
-          if (m && m[2].length >= 2) {
-            validated.push(m[1], m[2]);
-          } else {
-            validated.push(token);
-          }
-        }
-        continue;
-      }
-
-      // Pattern 2: 4-digit tokens that look like width+thick merged
-      if (/^\d{4}$/.test(token) && i >= 5) {
-        const patterns = [
-          /^(\d{2})(\d{2})$/, // e.g., "5960" → 59,60
-          /^(\d{3})(\d{1})$/, // e.g., "9006" → 900,6
-        ];
-
-        let matched = false;
-        for (const pattern of patterns) {
-          const m = token.match(pattern);
-          if (m) {
-            validated.push(m[1], m[2]);
-            matched = true;
-            break;
-          }
-        }
-
-        if (!matched) {
-          validated.push(token);
-        }
-        continue;
-      }
-
-      // Pattern 3: 2-digit tokens that might be merged width+thickness
-      // Common pattern: width and thickness are close in value or same
-      // Examples: "66" (6+6), "77" (7+7), "88" (8+8), "810" (8+10), etc.
-      if (/^\d{2}$/.test(token) && i >= 4) {
-        const [d1, d2] = token.split("");
-        // Split if:
-        // 1. Both digits are identical (66, 77, 88, etc)
-        // 2. Both individual digits are valid thickness values (1-50)
-        if (d1 === d2) {
-          const singleDigit = parseInt(d1);
-          // Thickness range is 1-50, so if both are the same single digit, split it
-          if (singleDigit >= 1 && singleDigit <= 9) {
-            validated.push(d1, d2); // Split "66" → "6", "6"
-            continue;
-          }
-        }
-
-        // Also try splitting if first digit could be thickness (1-9) and second is single digit
-        const d1_int = parseInt(d1);
-        const d2_int = parseInt(d2);
-        if (d1_int >= 1 && d1_int <= 9 && d2_int >= 1 && d2_int <= 9) {
-          // Both could be thickness values - might be merged thickness+something
-          // Don't split ambiguous cases, only if they look obviously merged
-          if (d1 === d2 || (d1_int <= 5 && d2_int <= 5)) {
-            validated.push(d1, d2);
-            continue;
-          }
-        }
-      }
-
-      validated.push(token);
     }
 
-    return { ...row, tokens: validated };
+    // Collect numeric candidates excluding pcs and m3
+    const numericCandidates = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (i === pcsIndex) continue;
+      if (i === m3Index) continue;
+      if (isNumericCandidate(tokens[i])) numericCandidates.push(tokens[i]);
+    }
+
+    // Assign per rules: process RIGHT->LEFT. If more than 3 candidates, use the last three.
+    const assign = { length: "", width: "", thick: "" };
+    const n = numericCandidates.length;
+    if (n === 1) {
+      assign.length = normalize(numericCandidates[0]);
+    } else if (n === 2) {
+      assign.length = normalize(numericCandidates[0]);
+      assign.thick = normalize(numericCandidates[1]);
+    } else if (n >= 3) {
+      const lastThree = numericCandidates.slice(-3);
+      assign.length = normalize(lastThree[0]);
+      assign.width = normalize(lastThree[1]);
+      assign.thick = normalize(lastThree[2]);
+    }
+
+    // Validate, fail-fast by clearing invalid fields (do NOT shift)
+    if (assign.thick && !validateThickness(assign.thick)) assign.thick = "";
+    if (assign.width && !validateLengthWidth(assign.width)) assign.width = "";
+    if (assign.length && !validateLengthWidth(assign.length)) assign.length = "";
+
+    return { ...row, parsed_dimensions: assign };
   });
 
   return data;
@@ -142,28 +157,11 @@ function validateAndSplitMergedTokens(data) {
  * This function detects and splits suspicious 2-digit values
  */
 function fixMergedDimensionValue(value) {
-  if (!value) return value;
+  if (value === null || value === undefined) return value;
 
-  const str = String(value).trim();
-
-  // Only process 2-digit numeric values (not ranges or decimals)
-  if (!/^\d{2}$/.test(str)) {
-    return value;
-  }
-
-  const [d1, d2] = str.split("");
-
-  // Pattern: Both digits identical (66, 77, 88, etc.)
-  // This typically indicates merged width + thickness
-  if (d1 === d2) {
-    const digit = parseInt(d1);
-    // If both are valid single digits (1-9), take the first one
-    if (digit >= 1 && digit <= 9) {
-      return d1; // "66" → "6", "77" → "7", etc.
-    }
-  }
-
-  return value;
+  // Normalize only: commas -> dots, normalize ranges with spaces. Do NOT split or guess.
+  const s = String(value).trim().replace(/,/g, ".").replace(/\s*-\s*/g, " - ");
+  return s;
 }
 
 async function extractJsonFromPDF(text) {
