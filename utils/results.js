@@ -98,7 +98,6 @@ const resultsFunc = async (req) => {
             ...row,
             order: order,
             client: client,
-            _debug_raw_row: row,
           }));
           // NOTE: do NOT apply heuristic splitting here. `extractJsonFromPDF` now returns
           // normalized and validated values and rows may include `parsed_dimensions` for strict cases.
@@ -153,16 +152,12 @@ const resultsFunc = async (req) => {
                   width: pd.width || "",
                   thick: pd.thick || "",
                   m3: m3 || "",
-                _debug_parsed_dimensions: pd,
-                _debug_tokens: toks,
                 };
 
                 parsed.material_details.push(result);
                 console.log(`✅ Row OK (strict): ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`);
               } else {
                 const result = assignColumns(r.tokens, order, client);
-                // include debug info from assignColumns
-                result._debug_tokens = r.tokens;
                 parsed.material_details.push(result);
                 console.log(
                   `✅ Row OK: ${result.item} - L:${result.length} W:${result.width} T:${result.thick}`
