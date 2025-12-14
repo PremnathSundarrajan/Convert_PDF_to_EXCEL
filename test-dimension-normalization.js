@@ -138,5 +138,56 @@ runTest(
   }
 );
 
+// Test Case 8: Repeating width and thick values
+runTest(
+  "should correctly assign width and thick even with duplicate tokens",
+  { tokens: ["item", "material", "100", "50", "50", "10", "0.1"] },
+  {
+    order: "",
+    client: "",
+    pcs: "",
+    item: "item",
+    material: "material",
+    length: "100",
+    width: "50",
+    thick: "50",
+    m3: "0.1",
+  }
+);
+
+// Test Case 9: Concatenated width and thick `106` should be split
+runTest(
+  "should split concatenated token `106` into `10` and `6`",
+  { tokens: ["item", "material", "120", "106", "0.1"] },
+  {
+    order: "",
+    client: "",
+    pcs: "",
+    item: "item",
+    material: "material",
+    length: "120",
+    width: "10",
+    thick: "6",
+    m3: "0.1",
+  }
+);
+
+// Test Case 10: Valid 3-digit number should not be split
+runTest(
+  "should not split valid 3-digit number like `120`",
+  { tokens: ["item", "material", "120", "50", "10", "0.1"] },
+  {
+    order: "",
+    client: "",
+    pcs: "",
+    item: "item",
+    material: "material",
+    length: "120",
+    width: "50",
+    thick: "10",
+    m3: "0.1",
+  }
+);
+
 
 console.log("\nAll dimension normalization tests passed!");

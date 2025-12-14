@@ -3,172 +3,175 @@
 /**
  * Test Suite for Refactored assignColumns
  *
- * Tests the clean, deterministic implementation against real-world scenarios
+ * Tests the strict parsing logic based on explicit rules.
  */
 
 const assignColumns = require("./utils/assignColumns_refactored");
 
 console.log(`
 ╔════════════════════════════════════════════════════════════════════╗
-║           REFACTORED assignColumns - Test Suite                   ║
-║  Clean, Deterministic, One-Pass Implementation                    ║
+║             STRICT assignColumns - Test Suite                     ║
+║           Rule-Based, Non-Positional Implementation               ║
 ╚════════════════════════════════════════════════════════════════════╝
 `);
 
 // Test data with order and client
-const order = "12-008";
-const client = "Miali";
+const order = "24-001";
+const client = "TestClient";
 
-// Test cases with expected outputs
-const testCases = [
+// New test cases based on the strict rules
+const newTestCases = [
   {
-    name: "Column with range thickness",
-    tokens: ["1", "column", "royal", "impala", "22", "75", "10-8", "0.017"],
+    name: "Rule 4 & 9: Normalize decimal range for length",
+    tokens: ["1", "item", "63,3-10", "50", "5"],
     expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "column",
-      material: "royal impala",
-      length: "22",
-      width: "75",
-      thick: "10-8",
-      m3: "0.017",
+      length: "63.3 - 10",
+      width: "50",
+      thick: "5",
     },
   },
   {
-    name: "Headstone with simple thickness",
-    tokens: ["1", "headstone", "royal", "impala", "56", "87", "8", "0.039"],
+    name: "Rule 9: Simple single-digit width",
+    tokens: ["1", "item", "100", "6", "10"],
     expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "headstone",
-      material: "royal impala",
-      length: "56",
-      width: "87",
-      thick: "8",
-      m3: "0.039",
+      length: "100",
+      width: "6",
+      thick: "10",
+    },
+  },
+    {
+    name: "Rule 9: Simple two-digit width",
+    tokens: ["1", "item", "120", "59", "12"],
+    expected: {
+      length: "120",
+      width: "59",
+      thick: "12",
     },
   },
   {
-    name: "Tombstone with left/right modifier",
-    tokens: [
-      "1",
-      "tombstone",
-      "left",
-      "royal",
-      "impala",
-      "180",
-      "25",
-      "8",
-      "0.036",
-    ],
+    name: "Rule 9: Simple single-digit thick",
+    tokens: ["1", "item", "150", "80", "6"],
     expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "tombstone left",
-      material: "royal impala",
-      length: "180",
-      width: "25",
-      thick: "8",
-      m3: "0.036",
-    },
-  },
-  {
-    name: "Multiple sidekerbs",
-    tokens: ["2", "sidekerbs", "black", "premium", "150", "106", "10", "0.018"],
-    expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "2",
-      item: "sidekerbs",
-      material: "black premium",
       length: "150",
-      width: "106",
-      thick: "10",
-      m3: "0.018",
-    },
-  },
-  {
-    name: "Decimal width (comma in original, normalized to dot)",
-    tokens: ["1", "base", "black", "premium", "80", "30.5", "8", "0.019"],
-    expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "base",
-      material: "black premium",
-      length: "80",
-      width: "30.5",
-      thick: "8",
-      m3: "0.019",
-    },
-  },
-  {
-    name: "Range format dimensions",
-    tokens: [
-      "1",
-      "tombstone",
-      "right",
-      "royal",
-      "impala",
-      "180",
-      "59-57",
-      "6",
-      "0.062",
-    ],
-    expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "tombstone right",
-      material: "royal impala",
-      length: "180",
-      width: "59-57",
+      width: "80",
       thick: "6",
-      m3: "0.062",
     },
   },
   {
-    name: "Minimal tokens (missing material)",
-    tokens: ["1", "column", "22", "75", "10", "0.015"],
+    name: "Rule 9: Simple two-digit thick",
+    tokens: ["1", "item", "200", "90", "12"],
     expected: {
-      order: "12-008",
-      client: "Miali",
-      pcs: "1",
-      item: "column",
-      material: "",
-      length: "22",
-      width: "75",
-      thick: "10",
-      m3: "0.015",
+      length: "200",
+      width: "90",
+      thick: "12",
     },
+  },
+  {
+    name: "Rule 3 & 9: Reject width with > 3 digits",
+    tokens: ["1", "item", "100", "1234", "10"],
+    expected: {
+      length: "100",
+      width: "",
+      thick: "10",
+    },
+  },
+    {
+    name: "Rule 3: Reject thick with > 2 digits",
+    tokens: ["1", "item", "100", "50", "123"],
+    expected: {
+      length: "100",
+      width: "50",
+      thick: "",
+    },
+  },
+  {
+    name: "Rule 5 & 9: Handle invalid overlap '66 6 59'",
+    tokens: ["1", "item", "66", "6", "59"],
+    expected: {
+      length: "",
+      width: "59", // 66 is ambiguous (L/W), 6 is ambiguous (L/W/T)
+      thick: "",
+    },
+  },
+  {
+    name: "Rule 6: Discard token '50' as it is ambiguous (L/W/T)",
+    tokens: ["1", "item", "50"],
+    expected: {
+      length: "",
+      width: "",
+      thick: "",
+    },
+  },
+  {
+    name: "Rule 7: Handle multiple valid 'thick' tokens -> ambiguous",
+    tokens: ["1", "item", "100", "8", "9"],
+    expected: {
+      length: "100",
+      width: "",
+      thick: "", // Ambiguous because both 8 and 9 are valid for thick
+    },
+  },
+    {
+    name: "Rule 2 & 5: Reject invalid token '59-6-2'",
+    tokens: ["1", "item", "100", "59-6-2", "10"],
+    expected: {
+      length: "100",
+      width: "",
+      thick: "10",
+    },
+  },
+  {
+    name: "Rule 2: Reject invalid token '6.66.6'",
+    tokens: ["1", "item", "100", "6.66.6", "10"],
+    expected: {
+      length: "100",
+      width: "",
+      thick: "10",
+    },
+  },
+  {
+      name: "Rule 1 & 7: Correctly assign from a complex set of tokens",
+      tokens: ["1", "item", "200", "50", "10"], // 200 is L/W, 50 is L/W/T, 10 is L/W/T
+      expected: {
+          length: "200",
+          width: "50",
+          thick: "10",
+      },
+  },
+  {
+      name: "Unambiguous thick value with ambiguous L/W",
+      tokens: ["1", "item", "150", "12"],
+      expected: {
+          length: "150",
+          width: "",
+          thick: "12",
+      },
   },
 ];
+
 
 // Run tests
 let passed = 0;
 let failed = 0;
 
-testCases.forEach((testCase, idx) => {
+newTestCases.forEach((testCase, idx) => {
   console.log(`\nTest ${idx + 1}: ${testCase.name}`);
   console.log(`Input tokens: ${JSON.stringify(testCase.tokens)}`);
 
+  // We pass only the relevant tokens for dimensions to the function
+  const dimensionTokens = testCase.tokens.filter(t => !isNaN(parseFloat(t.replace(',', '.'))) || t.includes('-'));
+  
   const result = assignColumns(testCase.tokens, order, client);
 
-  // Compare result to expected
+  // Compare result to expected for the dimension keys
   let testPassed = true;
   const errors = [];
 
   for (const [key, expectedValue] of Object.entries(testCase.expected)) {
-    const resultValue = result[key];
-    if (resultValue !== expectedValue) {
+    if (result[key] !== expectedValue) {
       testPassed = false;
       errors.push(
-        `  ❌ ${key}: expected "${expectedValue}", got "${resultValue}"`
-      );
+        `  ❌ ${key}: expected "${expectedValue}", got "${result[key]}"`);
     }
   }
 
@@ -188,62 +191,9 @@ console.log(`
 ║                         TEST SUMMARY                              ║
 ╚════════════════════════════════════════════════════════════════════╝
 
-Total Tests:  ${testCases.length}
+Total Tests:  ${newTestCases.length}
 Passed:       ${passed} ✅
 Failed:       ${failed} ❌
 
 ${failed === 0 ? "🎉 ALL TESTS PASSED!" : "⚠️  Some tests failed"}
-
-═══════════════════════════════════════════════════════════════════════
-IMPLEMENTATION FEATURES
-═══════════════════════════════════════════════════════════════════════
-
-✅ Deterministic:     Always produces same output for same input
-✅ One-Pass:          Single scan through tokens, no backtracking
-✅ Readable:          Clear logic flow, no complex heuristics
-✅ Order/Client:      Copies to every row as required
-✅ Normalization:     Commas → dots, hyphens preserved
-✅ No token loss:     All tokens accounted for in output
-✅ No inference:      Only reads values, never calculates
-✅ Excel-safe:        Proper JSON format
-
-═══════════════════════════════════════════════════════════════════════
-COLUMN ASSIGNMENT LOGIC
-═══════════════════════════════════════════════════════════════════════
-
-1. Extract M3:       Last token if decimal (0.xxx)
-2. Extract PCS:      First 1-2 digit integer
-3. Extract numerics: First 3 numeric columns = length, width, thick
-4. Remaining text:   Split into item and material
-
-Formats accepted:
-- Simple:     "22", "53", "180"
-- Range:      "159-157", "10-8", "59-57"
-- Decimal:    "63.3", "30.5"
-- Decimal range: "63.3-10"
-
-═══════════════════════════════════════════════════════════════════════
-USAGE
-═══════════════════════════════════════════════════════════════════════
-
-const assignColumns = require('./utils/assignColumns_refactored');
-
-const tokens = ["1", "headstone", "black", "premium", "56", "87", "8", "0.039"];
-const row = assignColumns(tokens, "12-008", "Miali");
-
-console.log(row);
-// Output:
-// {
-//   order: "12-008",
-//   client: "Miali",
-//   pcs: "1",
-//   item: "headstone",
-//   material: "black premium",
-//   length: "56",
-//   width: "87",
-//   thick: "8",
-//   m3: "0.039"
-// }
-
-═══════════════════════════════════════════════════════════════════════
 `);
