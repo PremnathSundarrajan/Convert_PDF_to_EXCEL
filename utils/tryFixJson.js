@@ -10,18 +10,8 @@ function tryFixJson(str) {
     // Quote unquoted keys
     fixed = fixed.replace(/([{,]\s*)([A-Za-z0-9_]+)\s*:/g, '$1"$2":');
 
-    // Fix missing comma between objects (} followed by {)
-    fixed = fixed.replace(/}\s*{/g, '}, {');
-
-    // Fix missing comma after closing brace followed by newline and opening brace
-    // This catches: }\n    { -> },\n    {
-    fixed = fixed.replace(/}\s*\n\s*{/g, '},\n    {');
-
-    // Fix pattern like "key" "value" to "key": "value"
-    fixed = fixed.replace(/"(\w+)"\s*"(.*?)"/g, '"$1": "$2",');
-
-    // Another pass for } followed by { with any whitespace
-    fixed = fixed.replace(/}\s*(\{)/g, '},$1');
+    // Fix missing comma between objects (e.g. } { )
+    fixed = fixed.replace(/(})\s*({)/g, '$1,$2');
 
     // Remove trailing commas
     fixed = fixed.replace(/,\s*([}\]])/g, '$1');

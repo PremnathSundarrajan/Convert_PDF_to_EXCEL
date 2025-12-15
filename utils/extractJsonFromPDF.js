@@ -1,142 +1,10 @@
 const OpenAI = require("openai");
 const dotenv = require("dotenv");
 const sanitizeAIResponse = require("./sanitizeAIResponse");
+const tryFixJson = require("./tryFixJson");
 
 dotenv.config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-// Post-extraction validation: detect merged numeric tokens and split them intelligently
-function validateAndSplitMergedTokens(data) {
-  const normalize = (v) => {
-    if (v === null || v === undefined) return "";
-    let s = String(v).trim();
-    s = s.replace(/,/g, ".");
-    s = s.replace(/\s*-\s*/g, " - ");
-    return s;
-  };
-
-  const isZero = (val) => {
-    if (val === null || val === undefined) return false;
-    const s = String(val).trim().replace(/,/g, '.');
-    return parseFloat(s) === 0;
-  }
-
-  const isValidThickness = (s) => {
-    if (!s || isZero(s)) return false;
-    if (s.includes("-")) {
-      const parts = s.split("-").map((p) => p.trim());
-      return parts.every((p) => /^\d{1,2}$/.test(p) && !isZero(p));
-    }
-    return /^\d{1,2}$/.test(s);
-  };
-
-  const isValidLengthWidth = (s) => {
-    if (!s || isZero(s)) return false;
-    if (s.includes("-")) {
-      const parts = s.split("-").map((p) => p.trim());
-      return parts.every((p) => /^\d{1,3}$/.test(p) && !isZero(p));
-    }
-    if (/^[\d.]+$/.test(s)) {
-      const clean = s.replace(/\./g, "");
-      return /^\d{1,3}$/.test(clean) && !isZero(s);
-    }
-    return false;
-  };
-  
-  const isM3 = (t) => /^0[.,]\d+$/i.test(String(t).trim()) && !isZero(t);
-  const isPCS = (t) => /^\d{1,2}$/.test(String(t).trim()) && !isZero(t);
-  const isNumericCandidate = (t) => {
-    if (t === null || t === undefined || isZero(t)) return false;
-    const s = String(t).trim();
-    if (/^\d+$/.test(s)) return true; // integer
-    if (/^\d+[.,]\d+$/.test(s)) return true; // decimal
-    if (/^\d+\s*-\s*\d+$/.test(s)) return true; // range
-    return false;
-  };
-
-  // Handle material_details (direct LLM extraction) -> normalize & validate only
-  if (data.material_details && Array.isArray(data.material_details)) {
-    data.material_details = data.material_details.map((row) => {
-      row.length = normalize(row.length);
-      row.width = normalize(row.width);
-      row.thick = normalize(row.thick);
-
-      if (!isValidLengthWidth(row.length)) row.length = "";
-      if (!isValidLengthWidth(row.width)) row.width = "";
-      if (!isValidThickness(row.thick)) row.thick = "";
-
-      if (!row.length || !row.width || !row.thick || !row.pcs || !row.item || !row.material || !row.m3) return null;
-      if (isZero(row.pcs) || isZero(row.m3)) return null;
-
-      return row;
-    }).filter(Boolean);
-
-    return data;
-  }
-
-  // Handle rows/tokens format
-  if (!data.rows || !Array.isArray(data.rows)) return data;
-
-  data.rows = data.rows.map((row) => {
-    if (!row.tokens || !Array.isArray(row.tokens) || row.tokens.some(t => t === null || t === undefined || t === '')) return null;
-
-    const tokens = row.tokens.map((t) => String(t).trim());
-
-    const pcsIndex = tokens.length > 0 && isPCS(tokens[0]) ? 0 : -1;
-    if (pcsIndex === -1) return null;
-
-    let m3Index = -1;
-    for (let i = tokens.length - 1; i >= 0; i--) {
-      if (isM3(tokens[i])) {
-        m3Index = i;
-        break;
-      }
-    }
-    if (m3Index === -1) return null;
-
-    const numericCandidates = [];
-    for (let i = 0; i < tokens.length; i++) {
-      if (i === pcsIndex) continue;
-      if (i === m3Index) continue;
-      if (isNumericCandidate(tokens[i])) numericCandidates.push(tokens[i]);
-    }
-
-    const assign = { length: "", width: "", thick: "" };
-    const n = numericCandidates.length;
-    if (n === 1) {
-      assign.length = normalize(numericCandidates[0]);
-    } else if (n === 2) {
-      assign.length = normalize(numericCandidates[0]);
-      assign.thick = normalize(numericCandidates[1]);
-    } else if (n >= 3) {
-      const lastThree = numericCandidates.slice(-3);
-      assign.length = normalize(lastThree[0]);
-      assign.width = normalize(lastThree[1]);
-      assign.thick = normalize(lastThree[2]);
-    }
-
-    if (!validateThickness(assign.thick)) return null;
-    if (!validateLengthWidth(assign.width)) return null;
-    if (!validateLengthWidth(assign.length)) return null;
-
-    return { ...row, parsed_dimensions: assign };
-  }).filter(Boolean);
-
-  return data;
-}
-
-/**
- * Fix merged dimension values in material_details format (new LLM format)
- * Example: width="66" might be merged from 6+6
- * This function detects and splits suspicious 2-digit values
- */
-function fixMergedDimensionValue(value) {
-  if (value === null || value === undefined) return value;
-
-  // Normalize only: commas -> dots, normalize ranges with spaces. Do NOT split or guess.
-  const s = String(value).trim().replace(/,/g, ".").replace(/\s*-\s*/g, " - ");
-  return s;
-}
 
 async function extractJsonFromPDF(text) {
   const system =
@@ -203,10 +71,12 @@ COLUMN SPECIFICATIONS (STRICT REQUIREMENTS):
   - ❌ WRONG: Including dimensions like "56" or "87"
 
 [COLUMN 4] LENGTH (dimension):
-  - Type: NUMERIC or RANGE
+  - Type: NUMERIC, DECIMAL, or RANGE
   - Format: 
     * Simple: 2-3 digits (20, 53, 100, 180, 227, etc.)
+    * Decimal: X,Y or XX,Y or XXX,Y format (e.g. 12,3)
     * Range: N-N format (100-90, 159-157, 180-175, etc.)
+    * Decimal Range: X,Y-Z format (e.g. 12,3-10)
   - Digit Limits: 
     * Minimum: 10
     * Maximum: 999
@@ -214,7 +84,7 @@ COLUMN SPECIFICATIONS (STRICT REQUIREMENTS):
     * Range second value: 50-300
   - Rules: ALWAYS a dimension, NEVER text. Third numeric value in row.
   - Must be SEPARATE from width and thickness.
-  - Examples: "22", "53", "180", "159-157", "200", "227"
+  - Examples: "22", "53", "180", "159-157", "200", "227", "12,3", "12,3-10"
   - ❌ WRONG: "2275" (merged length+width), "56-87" (this is width+thick pattern)
 
 [COLUMN 5] WIDTH (dimension):
@@ -229,7 +99,7 @@ COLUMN SPECIFICATIONS (STRICT REQUIREMENTS):
     * Maximum: 200
     * Can have comma decimal (60,026 = 60.026)
   - Rules: Fourth numeric value in row. ALWAYS separate from length and thickness. Range values stay together with hyphen.
-  - Examples: "9", "15", "25", "30", "62", "75", "87", "90", "63,3", "59-57", "63,3-10", "30,5-25"
+  - Examples: "9", "15", "25", "30", "62", "75", "87", "90", "63,3", "59-57", "63,3-10", "30,5-25", "12,3", "12,3-10"
   - ❌ WRONG: "2275" (merged from length), "759" (merged width+thickness), "63,3" + "10" (split - should be "63,3-10")
 
 [COLUMN 6] THICKNESS (dimension):
@@ -241,17 +111,17 @@ COLUMN SPECIFICATIONS (STRICT REQUIREMENTS):
     * Minimum: 1
     * Maximum: 50
     * If >2 digits: MUST be a range like "10-8"
-  - Rules: Fifth numeric value. SMALLEST numeric value. NEVER 3+ digits without hyphen.
+  - Rules: Fifth numeric value. SMALLEST numeric value. NEVER 3+ digits without hyphen. Pay close attention to ranges like '10-8'; they are valid thickness values and must be extracted.
   - Examples: "6", "8", "10", "15", "25", "10-8"
   - ❌ WRONG: "78" (this is 2 separate values: width=7 + thick=8), "259" (this is width=25 + thick=9)
 
 [COLUMN 7] M3 (cubic meters):
   - Type: DECIMAL
-  - Format: 0,XXX or 0.XXX (comma or period as decimal separator)
+  - Format: 0.XXX (use a period '.' as decimal separator)
   - Range: 0.001 to 1.0
   - Rules: ALWAYS last token. ALWAYS starts with 0 followed by decimal separator.
-  - Examples: "0,017", "0,039", "0.026", "0.056", "0,003"
-  - ❌ WRONG: "17" (missing leading 0.), "017" (no decimal point/comma)
+  - Examples: "0.017", "0.039", "0.026", "0.056", "0.003"
+  - ❌ WRONG: "17" (missing leading 0.), "0,017" (uses comma instead of period)
 
 ═══════════════════════════════════════════════════════════════════
 CRITICAL: TOKEN SEPARATION RULES (MAXIMUM ENFORCEMENT)
@@ -297,8 +167,8 @@ DETAILED EXAMPLES (Study These Carefully)
 ═══════════════════════════════════════════════════════════════════
 
 ✅ CORRECT EXTRACTION 1:
-PDF Row: 1  column  royal impala  22  75  10-8  0,017
-Tokens:  ["1", "column", "royal", "impala", "22", "75", "10-8", "0,017"]
+PDF Row: 1  column  royal impala  22  75  10-8  0.017
+Tokens:  ["1", "column", "royal", "impala", "22", "75", "10-8", "0.017"]
          [pcs] [item]   [material-1] [material-2] [length] [width] [thickness] [m3]
 
 ✅ CORRECT EXTRACTION 2:
@@ -308,10 +178,6 @@ Tokens:  ["1", "headstone", "royal", "impala", "56", "87", "8", "0,039"]
 ✅ CORRECT EXTRACTION 3:
 PDF Row: 1  tombstone left  royal impala  180  25  8  0,036
 Tokens:  ["1", "tombstone", "left", "royal", "impala", "180", "25", "8", "0,036"]
-
-✅ CORRECT EXTRACTION 4:
-PDF Row: 2  sidekerbs  black  premium  150  106  10  0,018
-Tokens:  ["2", "sidekerbs", "black", "premium", "150", "106", "10", "0,018"]
 
 ❌ FATAL ERROR 1 (merged length+width):
 PDF Row: 1  headstone  royal impala  56  87  8  0,039
@@ -354,11 +220,11 @@ RETURN ONLY THIS JSON STRUCTURE (no markdown, no explanation):
 {
   "order": "12-008",
   "client": "Miali",
-  "rows": [
-    { "tokens": ["1", "column", "royal", "impala", "22", "75", "10-8", "0,017"] },
-    { "tokens": ["1", "headstone", "royal", "impala", "56", "87", "8", "0,039"] },
-    { "tokens": ["1", "tombstone", "left", "royal", "impala", "180", "25", "8", "0,036"] },
-    { "tokens": ["1", "tombstone", "right", "royal", "impala", "180", "57", "6", "0,062"] }
+  "material_details": [
+    { "pcs": "1", "item": "column", "material": "royal impala", "length": "22", "width": "75", "thick": "10-8", "m3": "0.017" },
+    { "pcs": "1", "item": "headstone", "material": "royal impala", "length": "56", "width": "87", "thick": "8", "m3": "0.039" },
+    { "pcs": "1", "item": "tombstone", "material": "left royal impala", "length": "180", "width": "25", "thick": "8", "m3": "0.036" },
+    { "pcs": "1", "item": "tombstone", "material": "right royal impala", "length": "180", "width": "57", "thick": "6", "m3": "0.062" }
   ]
 }
 
@@ -370,27 +236,17 @@ ${text}
 `;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4.1",
+    model: "gpt-4-turbo",
     messages: [
       { role: "system", content: system },
       { role: "user", content: prompt },
     ],
     temperature: 0,
-    max_tokens: 16000,
+    max_tokens: 4096,
   });
 
   let content = completion.choices[0].message.content || "";
-  content = sanitizeAIResponse(content);
-
-  // Parse and validate the response to fix any merged tokens
-  try {
-    let data = JSON.parse(content);
-    data = validateAndSplitMergedTokens(data);
-    return JSON.stringify(data);
-  } catch (e) {
-    // If parsing fails, return raw content (sanitizeAIResponse should handle this)
-    return content;
-  }
+  return sanitizeAIResponse(content);
 }
 
 module.exports = extractJsonFromPDF;

@@ -9,6 +9,125 @@ const pdfParse = require("pdf-parse");
 
 const NOTE_WORDS = new Set(["with", "punched", "line"]);
 
+function validateAndSplitMergedTokens(data) {
+  const normalize = (v) => {
+    if (v === null || v === undefined) return "";
+    let s = String(v).trim();
+    s = s.replace(/,/g, ".");
+    s = s.replace(/\s*-\s*/g, "-");
+    return s;
+  };
+
+  const isZero = (val) => {
+    if (val === null || val === undefined) return false;
+    const s = String(val).trim().replace(/,/g, '.');
+    return parseFloat(s) === 0;
+  }
+
+  const isValidThickness = (s) => {
+    if (!s || isZero(s)) return false;
+    if (s.includes("-")) {
+      const parts = s.split("-").map((p) => p.trim());
+      return parts.every((p) => /^\d{1,2}$/.test(p) && !isZero(p));
+    }
+    return /^\d{1,2}$/.test(s);
+  };
+
+  const isValidLengthWidth = (s) => {
+    if (!s || isZero(s)) return false;
+    if (s.includes("-")) {
+      const parts = s.split("-").map((p) => p.trim());
+      return parts.every((p) => /^\d{1,3}$/.test(p) && !isZero(p));
+    }
+    if (/^[\d.]+$/.test(s)) {
+      const clean = s.replace(/\./g, "");
+      return /^\d{1,3}$/.test(clean) && !isZero(s);
+    }
+    return false;
+  };
+  
+  const isM3 = (t) => /^0[.,]\d+$/i.test(String(t).trim()) && !isZero(t);
+  const isPCS = (t) => /^\d{1,2}$/.test(String(t).trim()) && !isZero(t);
+  const isNumericCandidate = (t) => {
+    if (t === null || t === undefined || isZero(t)) return false;
+    const s = String(t).trim();
+    if (/^\d+$/.test(s)) return true; // integer
+    if (/^\d+[.,]\d+$/.test(s)) return true; // decimal
+    if (/^\d+\s*-\s*\d+$/.test(s)) return true; // range
+    return false;
+  };
+
+  // Handle material_details (direct LLM extraction) -> normalize & validate only
+  if (data.material_details && Array.isArray(data.material_details)) {
+    data.material_details = data.material_details.map((row) => {
+      row.length = normalize(row.length);
+      row.width = normalize(row.width);
+      row.thick = normalize(row.thick);
+
+      if (!isValidLengthWidth(row.length)) row.length = "";
+      if (!isValidLengthWidth(row.width)) row.width = "";
+      if (!isValidThickness(row.thick)) row.thick = "";
+
+      if (!row.length || !row.width || !row.thick || !row.pcs || !row.item || !row.material || !row.m3) return null;
+      if (isZero(row.pcs) || isZero(row.m3)) return null;
+
+      return row;
+    }).filter(Boolean);
+
+    return data;
+  }
+
+  // Handle rows/tokens format
+  if (!data.rows || !Array.isArray(data.rows)) return data;
+
+  data.rows = data.rows.map((row) => {
+    if (!row.tokens || !Array.isArray(row.tokens) || row.tokens.some(t => t === null || t === undefined || t === '')) return null;
+
+    const tokens = row.tokens.map((t) => String(t).trim());
+
+    const pcsIndex = tokens.length > 0 && isPCS(tokens[0]) ? 0 : -1;
+    if (pcsIndex === -1) return null;
+
+    let m3Index = -1;
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      if (isM3(tokens[i])) {
+        m3Index = i;
+        break;
+      }
+    }
+    if (m3Index === -1) return null;
+
+    const numericCandidates = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (i === pcsIndex) continue;
+      if (i === m3Index) continue;
+      if (isNumericCandidate(tokens[i])) numericCandidates.push(tokens[i]);
+    }
+
+    const assign = { length: "", width: "", thick: "" };
+    const n = numericCandidates.length;
+    if (n === 1) {
+      assign.length = normalize(numericCandidates[0]);
+    } else if (n === 2) {
+      assign.length = normalize(numericCandidates[0]);
+      assign.thick = normalize(numericCandidates[1]);
+    } else if (n >= 3) {
+      const lastThree = numericCandidates.slice(-3);
+      assign.length = normalize(lastThree[0]);
+      assign.width = normalize(lastThree[1]);
+      assign.thick = normalize(lastThree[2]);
+    }
+
+    if (!validateThickness(assign.thick)) return null;
+    if (!validateLengthWidth(assign.width)) return null;
+    if (!validateLengthWidth(assign.length)) return null;
+
+    return { ...row, parsed_dimensions: assign };
+  }).filter(Boolean);
+
+  return data;
+}
+
 // Sanitize material_details rows returned directly by LLM
 // Fix common merged width+thick cases where width may contain thick appended
 function sanitizeMaterialDetails(rows) {
@@ -80,6 +199,8 @@ const resultsFunc = async (req) => {
           console.warn("JSON repair triggered for:", file.originalname);
           parsed = JSON.parse(tryFixJson(rawJson));
         }
+
+        parsed = validateAndSplitMergedTokens(parsed);
 
         // Extract order and client if present
         const order = parsed.order || null;
