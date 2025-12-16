@@ -9,7 +9,7 @@ const upload = multer({ dest: "uploads/" });
 const convert = require("./controller/convert");
 app.use(
   cors({
-    origin: "https://pdf-excel-blond.vercel.app" || "http://localhost:8080",
+    origin: ["https://pdf-excel-blond.vercel.app", "http://localhost:8080"],
     credentials: true,
     methods: ["GET", "POST"],
   })
