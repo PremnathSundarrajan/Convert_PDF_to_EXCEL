@@ -180,15 +180,18 @@ function sanitizeMaterialDetails(rows) {
 }
 
 const resultsFunc = async (req) => {
+  console.log("[results.js] Entered 'resultsFunc'.");
   return await Promise.all(
     req.files.map(async (file) => {
+      console.log(`[results.js] Processing file: ${file.originalname}`);
       try {
+        console.log(`[results.js] Reading file: ${file.path}`);
         const pdfBuffer = fs.readFileSync(file.path);
+        console.log(`[results.js] Parsing PDF for: ${file.originalname}`);
         const pdfData = await pdfParse(pdfBuffer);
-
-        // ✅ ONE AND ONLY numeric repair
+        console.log(`[results.js] Normalizing text for: ${file.originalname}`);
         const normalizedText = normalizePdfText(pdfData.text);
-
+        console.log(`[results.js] Calling AI to extract JSON for: ${file.originalname}`);
         let rawJson = await extractJsonFromPDF(normalizedText);
         rawJson = sanitizeAIResponse(rawJson);
 

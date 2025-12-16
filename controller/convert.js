@@ -6,14 +6,18 @@ const path = require("path");
 const XLSX = require("xlsx");
 
 const convert = async (req, res) => {
+  console.log("[convert.js] Entered 'convert' function.");
   try {
     if (!req.files || req.files.length === 0) {
+      console.log("[convert.js] No files uploaded. Sending 400.");
       return res
         .status(400)
         .json({ success: false, error: "No files uploaded" });
     }
 
+    console.log(`[convert.js] ${req.files.length} files uploaded. Calling resultsFunc.`);
     const results = await resultsFunc(req);
+    console.log("[convert.js] Returned from resultsFunc.");
     // Debug: print raw results from resultsFunc for inspection
     console.log('----- RAW_RESULTS_FROM_RESULTS_FUNC_START -----');
     try { console.log(JSON.stringify(results, null, 2)); } catch (e) { console.log(results); }
