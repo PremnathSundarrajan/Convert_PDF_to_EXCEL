@@ -236,13 +236,13 @@ ${text}
 `;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4-turbo",
+    model: "gpt-4o",
     messages: [
       { role: "system", content: system },
       { role: "user", content: prompt },
     ],
     temperature: 0,
-    max_tokens: 4096,
+    max_tokens: 16000,
   });
 
   let content = completion.choices[0].message.content || "";
