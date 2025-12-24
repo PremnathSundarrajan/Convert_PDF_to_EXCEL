@@ -10,7 +10,7 @@ const convert = require("./controller/convert");
 const convertEuro = require("./controller/convertEuro");
 app.use(
   cors({
-    origin: ["https://pdf-excel-blond.vercel.app", "http://localhost:8080", "https://frontend-pdf-excel-aurelion.vercel.app", "https://frontend-pdf-excel-aurelion-tx97.vercel.app"],
+    origin: ["https://pdf-excel-blond.vercel.app", "http://localhost:8080", "https://frontend-pdf-excel-aurelion.vercel.app", "https://frontend-pdf-excel-aurelion-tx97.vercel.app","https://frontend-pdf-excel-aurelion-tx97-ax48bt82c.vercel.app"],
     credentials: true,
     methods: ["GET", "POST"],
   })
