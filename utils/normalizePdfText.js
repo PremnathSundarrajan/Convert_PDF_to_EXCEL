@@ -1,18 +1,25 @@
+/**
+ * normalizePdfText.js
+ * 
+ * Simple normalization to fix common PDF extraction issues like stuck words and numbers.
+ * We avoid aggressive number-to-number splits here, as GPT is better at context-aware splitting.
+ */
 function normalizePdfText(text) {
-  // 1️⃣ Spacing fix: Ensure m3 (0,xxx) has space before it if stuck
-  // e.g. 60,026 -> 6 0,026
-  text = text.replace(/(\d)(0,\d{3})/g, "$1 $2");
+  if (!text) return "";
 
-  // 2️⃣ Ensure pcs spacing: 1backskirt → 1 backskirt (at line start)
-  text = text.replace(/^(\d)([a-zA-Z])/gm, "$1 $2");
+  // 1. Fix stuck pcs: "1headstone" → "1 headstone" (at line start or after newline)
+  text = text.replace(/^(\d)([A-Za-z])/gm, "$1 $2");
 
-  // 3️⃣ Preserve column alignment: Replace 2+ consecutive spaces with a single space
-  // This maintains the distinction between "59  9  6" (columns) vs just normalizing to "59 9 6"
-  // CRITICAL: We do NOT collapse ALL whitespace to single spaces anymore
-  // Instead, we normalize 2+ spaces to 1 space, and trim line endings
-  text = text.replace(/[ \t]{2,}/g, " "); // Collapse multiple spaces/tabs to single space
-  text = text.replace(/\n\s+/g, "\n"); // Remove leading spaces from line starts
-  text = text.replace(/\s+\n/g, "\n"); // Remove trailing spaces from line ends
+  // 2. Fix stuck words and numbers elsewhere: "headstone53" → "headstone 53"
+  text = text.replace(/([A-Za-z])(\d)/g, "$1 $2");
+  text = text.replace(/(\d)([A-Za-z])/g, "$1 $2");
+
+  // 3. Fix stuck m3: "0,026with" → "0,026 with"
+  text = text.replace(/(0[.,]\d{3})([A-Za-z])/g, "$1 $2");
+
+  // 4. Ensure space between potential dimensions and m3
+  // e.g. "80,026" → "8 0,026"
+  text = text.replace(/(\d)(0[.,]\d{3})/g, "$1 $2");
 
   return text;
 }

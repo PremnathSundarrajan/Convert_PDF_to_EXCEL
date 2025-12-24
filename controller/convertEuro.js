@@ -41,14 +41,10 @@ const convertEuro = async (req, res) => {
             });
         }
 
-        // Flatten all rows from all files into one array
+        // Flatten all rows from all files into one array (ONE ROW PER PDF)
         let combinedRows = [];
-        allValidResults.forEach((fileRows, index) => {
+        allValidResults.forEach((fileRows) => {
             combinedRows.push(...fileRows);
-            // Add empty row between files for visual separation
-            if (index < allValidResults.length - 1) {
-                combinedRows.push({});
-            }
         });
 
         console.log(`[convertEuro.js] Total combined rows: ${combinedRows.length}`);
@@ -56,19 +52,21 @@ const convertEuro = async (req, res) => {
         // Create Excel workbook
         const workbook = XLSX.utils.book_new();
 
-        // Define column headers in exact order (NEW 8-COLUMN SCHEMA)
-        const headers = ["date", "client", "order_no", "material", "quantity", "material_cost", "extra_fee", "total_cost"];
+        // Define column headers in exact order (NEW STRICT 10-COLUMN SCHEMA)
+        const headers = ["date", "client", "order_no", "material", "delivery", "kgs", "m³", "material_cost", "extra_fee", "total_cost"];
 
         // Create worksheet from JSON with specific headers
         const ws = XLSX.utils.json_to_sheet(combinedRows, { header: headers });
 
-        // Calculate and apply column widths (NEW 8-COLUMN SCHEMA)
+        // Calculate and apply column widths (NEW 10-COLUMN SCHEMA)
         const columnWidths = {
             date: 12,
             client: 20,
             order_no: 12,
             material: 25,
-            quantity: 12,
+            delivery: 15,
+            kgs: 10,
+            "m³": 10,
             material_cost: 15,
             extra_fee: 12,
             total_cost: 12
