@@ -12,7 +12,7 @@ const jobManager = require("./utils/jobManager");
 
 app.use(
   cors({
-    origin: ["https://pdf-excel-blond.vercel.app", "http://localhost:8080", "https://frontend-pdf-excel-aurelion.vercel.app", "https://frontend-pdf-excel-aurelion-tx97.vercel.app", "http://localhost:5173"],
+    origin: ["https://pdf-excel-blond.vercel.app", "http://localhost:8080", "https://frontend-pdf-excel-aurelion.vercel.app", "https://frontend-pdf-excel-aurelion-tx97.vercel.app"],
     credentials: true,
     methods: ["GET", "POST"],
   })
