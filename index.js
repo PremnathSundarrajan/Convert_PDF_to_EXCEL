@@ -9,6 +9,7 @@ const upload = multer({ dest: "uploads/" });
 const convert = require("./controller/convert");
 const convertEuro = require("./controller/convertEuro");
 const removeHeader = require("./controller/removeHeader");
+const strictRemoveHeader = require("./controller/strictRemoveHeader");
 const jobManager = require("./utils/jobManager");
 
 app.use(
@@ -59,6 +60,7 @@ app.post("/convert", upload.array("pdfs"), convert.convert);
 app.post("/convert-debug", upload.array("pdfs"), convert.convertDebug);
 app.post("/convert-euro", upload.array("pdfs"), convertEuro.convertEuro);
 app.post("/remove-header", upload.array("pdfs"), removeHeader.removeHeader);
+app.post("/strict-remove-header", upload.array("pdfs"), strictRemoveHeader.strictRemoveHeader);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
