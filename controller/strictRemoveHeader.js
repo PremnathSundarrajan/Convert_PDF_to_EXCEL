@@ -30,36 +30,47 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             name: "Strict PDF Header/Footer Removal",
             instructions: `You are a Python execution engine for PDF Modification. You DO NOT make qualitative judgments. You EXECUTE the following logic using the 'fitz' (PyMuPDF) library.
 
-      ### MANDATORY REDACTION ALGORITHM (HARD REDACTION ONLY):
+      ### STRICT PDF CLEANING ALGORITHM (HARD REDACTION ONLY):
+
+      ❗ CRITICAL: Removed content must be COMPLETELY GONE. Areas must appear as PLAIN WHITE SPACE.
 
       1. **READ PDF**: Load the file using fitz.
       
       2. **STRICT HEADER REMOVAL (PAGE 1 ONLY)**:
-         - **Step 1: Locate Table Column Header Row**: Search Page 1 for the row containing ALL: "pcs", "item", "material", "thick", "m³" AND ("length" OR "width").
-         - **Step 2: Define Protection Zone**: 
+         - **Header = RED-MARKED TOP AREA**: Everything above the table header row.
+         - **Step 1: Locate Table Header Row**: Search Page 1 for the row containing ALL: "pcs", "item", "material", "length", "width", "thick", "m³".
+         - **Step 2: Hard Protect Table Header Row**: 
             - Extract \`y_table_top\` and \`y_table_bottom\`.
-            - Define ProtectedRect = fitz.Rect(0, y_table_top - 2, page.width, y_table_bottom + 2).
+            - Define ProtectedRect = fitz.Rect(0, y_table_top - 3, page.width, y_table_bottom + 3).
+            - ❗ NO REDACTION may overlap this zone.
          - **Step 3: Remove Header (HARD REDACTION)**: 
-            - Define HeaderRect = fitz.Rect(0, 0, page.width, y_table_top - 3).
-            - **ACTION**: Use \`page.add_redact_annot(HeaderRect, fill=(1, 1, 1))\`.
-            - This MUST remove company name, logo, date, factory, delivery, order, client, and all text/lines strictly ABOVE the table.
+            - Define HeaderRect = fitz.Rect(0, 0, page.width, y_table_top - 4).
+            - Use \`page.add_redact_annot(HeaderRect, fill=(1, 1, 1))\`.
+            - IMMEDIATELY call \`page.apply_redactions(images=True)\`.
+            - ❗ Result must be COMPLETELY WHITE. NO lines, NO marks, NO strike-through.
 
       3. **SURGICAL FOOTER REMOVAL (ALL PAGES)**:
-         - **Goal**: Key-Value based removal.
-         - **Targets**: "Total", "Material", "Extra Fee", "kgs", "m3", "m³".
-         - **Action**: Locate the exact text blocks for these keys. Expand redaction horizontally to capture the aligned value. 
-         - **ACTION**: Use \`page.add_redact_annot(rect, fill=(1, 1, 1))\`.
-         - **CRITICAL**: Do NOT remove drawings, diagrams, legends, or notes.
+         - **Footer = RED-MARKED BOTTOM VALUES**: Only specific key-value pairs.
+         - **Targets**: "Material", "Extra Fee", "Total", "kgs", "m3", "m³".
+         - **Action**: 
+            - Detect text blocks containing these keys.
+            - Expand horizontally to capture numeric values.
+            - Use \`page.add_redact_annot(rect, fill=(1, 1, 1))\`.
+            - IMMEDIATELY call \`page.apply_redactions(images=True)\`.
+         - ❗ Remove ONLY those blocks. Preserve drawings, diagrams, notes, legends.
 
-      4. **APPLY & FLATTEN (NON-NEGOTIABLE)**:
-         - **CRITICAL**: After adding ALL redaction annotations, you MUST call \`page.apply_redactions(images=True, graphics=True)\`.
-         - **Requirement**: The removed areas MUST be flat white space. NO red X marks, NO strike-through lines, NO highlight boxes, NO annotations left behind. The removed content MUST be non-selectable and indistinguishable from blank paper.
+      4. **FLATTEN & VERIFY (NON-NEGOTIABLE)**:
+         - After ALL redactions, flatten the page.
+         - ❗ FORBIDDEN: NO red lines, NO crosses, NO highlights, NO annotations, NO visible redaction boxes.
+         - ❗ REQUIREMENT: Removed areas must be PLAIN WHITE SPACE. Removed text must NOT be selectable.
 
-      5. **FINAL VALIDATION**:
-         - **Check 1**: Assert the table header row is readable.
-         - **Check 2**: Assert NO text or markup exists in HeaderRect.
-         - **Check 3**: Assert no target keywords remain.
-         - **Visual Check**: Ensure NO vector lines, boxes, or markings exist in redacted areas.
+      5. **FINAL VALIDATION (MANDATORY)**:
+         - **Check 1**: Header area (top) must be COMPLETELY WHITE.
+         - **Check 2**: Footer key-value areas must be COMPLETELY WHITE.
+         - **Check 3**: Table header row ("pcs | item | material | length | width | thick | m³") MUST exist and be readable.
+         - **Check 4**: NO red lines, NO strike marks, NO annotations visible.
+         - **Check 5**: Removed text must NOT be selectable.
+         - ❗ If ANY visual marking exists → OUTPUT IS INVALID → REPROCESS.
 
       6. **OUTPUT**: Save as 'processed_output.pdf'.`,
             tools: [{ type: "code_interpreter" }],
@@ -71,13 +82,25 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             messages: [
                 {
                     role: "user",
-                    content: `Execute the STRICT PDF → PDF HEADER & FOOTER REMOVAL TASK.
+                    content: `Execute STRICT PDF → PDF CLEANING TASK.
                     
-                    1. MANDATORY: All removals MUST be HARD REDACTIONS (\`apply_redactions(images=True)\`).
-                    2. NO strike-throughs, NO red marks, NO annotations. The areas MUST be plain white space, non-selectable.
-                    3. Page 1 Header: Remove everything strictly ABOVE the table header row (preserve y_top - 2 and below).
-                    4. All Pages Footer: Surgically remove keys/values ("Total", "Material", "Extra Fee", "kgs", "m3", "m³").
-                    5. Assert table row readable, no text above, no keywords remain.
+                    ❗ REMOVED CONTENT MUST BE COMPLETELY GONE. AREAS MUST BE PLAIN WHITE SPACE.
+                    
+                    HEADER (red-marked top area):
+                    - Ends immediately before table row: "pcs | item | material | length | width | thick | m³"
+                    - Protect: y_top - 3 to y_bottom + 3
+                    - Remove: Rect(0, 0, width, y_top - 4)
+                    - Apply HARD REDACTION (white fill=(1,1,1), apply_redactions(images=True), flatten)
+                    
+                    FOOTER (red-marked bottom values):
+                    - Keys: "Material", "Extra Fee", "Total", "kgs", "m3", "m³"
+                    - Key-value only, preserve drawings
+                    - Apply HARD REDACTION (white fill, flatten)
+                    
+                    ❌ FORBIDDEN: NO red lines, NO crosses, NO strike-through, NO annotations, NO visible markup.
+                    ✅ REQUIRED: Completely white blank space. Non-selectable text.
+                    
+                    Validate: White areas, table readable, no keywords, no visual marks.
                     
                     Return 'processed_output.pdf'. Visual markup = INVALID.`,
                     attachments: [
