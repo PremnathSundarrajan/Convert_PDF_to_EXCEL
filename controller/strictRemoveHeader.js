@@ -6,7 +6,8 @@ const jobManager = require("../utils/jobManager");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
- * Helper to process a single PDF file using OpenAI Assistants API with STRICT rules.
+ * PHASE FINAL — ABSOLUTE GEOMETRIC HEADER WIPE.
+ * ZERO-TOLERANCE SPECIFICATION WITH +20PX HEIGHT FIX.
  */
 async function processStrictFile(file, jobId, progressStart, progressStep) {
     try {
@@ -21,58 +22,54 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             jobManager.updateJob(
                 jobId,
                 Math.round(progressStart + progressStep * 0.3),
-                `AI strict processing: ${file.originalname}`
+                `Executing Absolute Geometic Redaction (+20px Fix): ${file.originalname}`
             );
         }
 
         // 2. Create Assistant
         const assistant = await openai.beta.assistants.create({
-            name: "Strict PDF Header/Footer Removal",
-            instructions: `You are a Python execution engine for PDF Modification. You DO NOT make qualitative judgments. You EXECUTE the following logic using the 'fitz' (PyMuPDF) library.
+            name: "Final Absolute PDF Redactor",
+            instructions: `You are a Python execution engine for PDF REDACTION using 'fitz' (PyMuPDF).
 
-      ### STRICT PDF CLEANING ALGORITHM (HARD REDACTION ONLY):
+### MISSION
+Execute 'Phase Final — Absolute Geometric Header Wipe' with MANDATORY Height Correction.
+Guaranteed metadata removal with clean white output.
 
-      ❗ CRITICAL: Removed content must be COMPLETELY GONE. Areas must appear as PLAIN WHITE SPACE.
+### 1. HEADER REMOVAL (PAGE 1 ONLY — FORCED)
+This step MUST execute even if structural detection fails.
 
-      1. **READ PDF**: Load the file using fitz.
-      
-      2. **STRICT HEADER REMOVAL (PAGE 1 ONLY)**:
-         - **Header = RED-MARKED TOP AREA**: Everything above the table header row.
-         - **Step 1: Locate Table Header Row**: Search Page 1 for the row containing ALL: "pcs", "item", "material", "length", "width", "thick", "m³".
-         - **Step 2: Hard Protect Table Header Row**: 
-            - Extract \`y_table_top\` and \`y_table_bottom\`.
-            - Define ProtectedRect = fitz.Rect(0, y_table_top - 3, page.width, y_table_bottom + 3).
-            - ❗ NO REDACTION may overlap this zone.
-         - **Step 3: Remove Header (HARD REDACTION)**: 
-            - Define HeaderRect = fitz.Rect(0, 0, page.width, y_table_top - 4).
-            - Use \`page.add_redact_annot(HeaderRect, fill=(1, 1, 1))\`.
-            - IMMEDIATELY call \`page.apply_redactions(images=True)\`.
-            - ❗ Result must be COMPLETELY WHITE. NO lines, NO marks, NO strike-through.
+**STEP A: Anchor Search**
+- Search Page 1 for a line containing ANY of: "pcs", "item", "material", "length", "width", "thick", "m3", "m³".
+- If found:
+  - Collect ALL spans belonging to that SAME visual line.
+  - table_header_y = MIN(y0) across all spans in that row.
+  - y1 = table_header_y + 20 (Mandatory +20px vertical buffer downward).
+- **Fail-Safe**: If the table header row is NOT found:
+  - y1 = page.height * 0.30 (30% of page height).
 
-      3. **SURGICAL FOOTER REMOVAL (ALL PAGES)**:
-         - **Footer = RED-MARKED BOTTOM VALUES**: Only specific key-value pairs.
-         - **Targets**: "Material", "Extra Fee", "Total", "kgs", "m3", "m³".
-         - **Action**: 
-            - Detect text blocks containing these keys.
-            - Expand horizontally to capture numeric values.
-            - Use \`page.add_redact_annot(rect, fill=(1, 1, 1))\`.
-            - IMMEDIATELY call \`page.apply_redactions(images=True)\`.
-         - ❗ Remove ONLY those blocks. Preserve drawings, diagrams, notes, legends.
+**STEP B: Absolute Geometric Wipe**
+- Redact exactly: Rect(x0=0, y0=0, x1=page.width * 0.5, y1=y1).
+- Use: page.add_redact_annot(rect, fill=(1,1,1)).
+- Goal: Remove Company, Date, Factory, Delivery on the LEFT. Preserving right-side fields.
+- TABLE HEADERS MUST REMAIN VISIBLE.
 
-      4. **FLATTEN & VERIFY (NON-NEGOTIABLE)**:
-         - After ALL redactions, flatten the page.
-         - ❗ FORBIDDEN: NO red lines, NO crosses, NO highlights, NO annotations, NO visible redaction boxes.
-         - ❗ REQUIREMENT: Removed areas must be PLAIN WHITE SPACE. Removed text must NOT be selectable.
+### 2. FOOTER REMOVAL (ALL PAGES — FORCED)
+- **Zone**: Only process text where y0 > 0.6 * page.height.
+- **Keywords**: "material", "materiaal", "extra fee", "extra kosten", "kgs", "kg", "m3", "m³", "total", "totaal".
+- **Action**: 
+  - For every keyword match, define: Rect(x0=0, y0=match.y0 - 2, x1=page.width, y1=match.y1 + 2).
+  - **Overlap Protection**: Do NOT apply if the rectangle overlaps an already redacted region on the same page.
+  - Use: page.add_redact_annot(rect, fill=(1,1,1)).
 
-      5. **FINAL VALIDATION (MANDATORY)**:
-         - **Check 1**: Header area (top) must be COMPLETELY WHITE.
-         - **Check 2**: Footer key-value areas must be COMPLETELY WHITE.
-         - **Check 3**: Table header row ("pcs | item | material | length | width | thick | m³") MUST exist and be readable.
-         - **Check 4**: NO red lines, NO strike marks, NO annotations visible.
-         - **Check 5**: Removed text must NOT be selectable.
-         - ❗ If ANY visual marking exists → OUTPUT IS INVALID → REPROCESS.
+### 3. GLOBAL RULES & FINALIZATION
+- **MANDATORY**: Call page.apply_redactions(images=True) for EVERY page.
+- **Aesthetic**: Output MUST contain clean white blank space. NO strike-throughs, highlights, red lines, or artifacts.
+- **Deliverability**: Removed text must be intrinsically non-selectable and non-searchable.
+- **Failure**: If PyMuPDF or OpenAI logic fails, THROW HARD ERROR. NEVER return original PDF.
 
-      6. **OUTPUT**: Save as 'processed_output.pdf'.`,
+### 4. AUDIT LOGGING
+- print(f"TABLE_HEADER_Y_ANCHOR: {table_header_y}")
+- print(f"HEADER_WIPE_FINAL_Y: {y1}")`,
             tools: [{ type: "code_interpreter" }],
             model: "gpt-4o",
         });
@@ -82,27 +79,16 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             messages: [
                 {
                     role: "user",
-                    content: `Execute STRICT PDF → PDF CLEANING TASK.
-                    
-                    ❗ REMOVED CONTENT MUST BE COMPLETELY GONE. AREAS MUST BE PLAIN WHITE SPACE.
-                    
-                    HEADER (red-marked top area):
-                    - Ends immediately before table row: "pcs | item | material | length | width | thick | m³"
-                    - Protect: y_top - 3 to y_bottom + 3
-                    - Remove: Rect(0, 0, width, y_top - 4)
-                    - Apply HARD REDACTION (white fill=(1,1,1), apply_redactions(images=True), flatten)
-                    
-                    FOOTER (red-marked bottom values):
-                    - Keys: "Material", "Extra Fee", "Total", "kgs", "m3", "m³"
-                    - Key-value only, preserve drawings
-                    - Apply HARD REDACTION (white fill, flatten)
-                    
-                    ❌ FORBIDDEN: NO red lines, NO crosses, NO strike-through, NO annotations, NO visible markup.
-                    ✅ REQUIRED: Completely white blank space. Non-selectable text.
-                    
-                    Validate: White areas, table readable, no keywords, no visual marks.
-                    
-                    Return 'processed_output.pdf'. Visual markup = INVALID.`,
+                    content: `Execute PHASE FINAL: ABSOLUTE GEOMETRIC HEADER WIPE (+20px correction).
+
+=====================================================
+WIPE Page 1 Header (LEFT 50% width, height anchored to table + 20px buffer OR 30% failsafe).
+WIPE Footer Rows Full-Width (>60% height) for all pricing keywords.
+=====================================================
+
+Strictly use add_redact_annot + apply_redactions(images=True). 
+No strike-throughs. No silent fallbacks. Fail if logic crashes.
+Return 'processed_output.pdf'.`,
                     attachments: [
                         { file_id: openAiFile.id, tools: [{ type: "code_interpreter" }] }
                     ],
@@ -114,7 +100,7 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             jobManager.updateJob(
                 jobId,
                 Math.round(progressStart + progressStep * 0.6),
-                `AI strict editing ${file.originalname}`
+                `Applying Absolute Redactions (+20px Fix) ${file.originalname}`
             );
         }
 
@@ -124,7 +110,6 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
         });
 
         if (run.status === "completed") {
-            // 5. Get the output file
             const messages = await openai.beta.threads.messages.list(thread.id);
             const lastMessage = messages.data[0];
 
@@ -137,21 +122,23 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
                         }
                     }
                 }
+                if (content.type === 'image_file' && content.image_file) {
+                    outputFileId = content.image_file.file_id;
+                }
             }
 
             if (!outputFileId) {
                 throw new Error("Assistant did not produce an output file.");
             }
 
-            // 6. Download the file
             const fileData = await openai.files.content(outputFileId);
             const buffer = Buffer.from(await fileData.arrayBuffer());
 
-            // Cleanup OpenAI objects
+            // Cleanup
             try {
                 await Promise.all([
-                    openai.beta.assistants.del(assistant.id),
-                    openai.files.del(openAiFile.id)
+                    openai.beta.assistants.delete(assistant.id),
+                    openai.files.delete(openAiFile.id)
                 ]);
             } catch (e) {
                 console.warn("Cleanup warning:", e.message);
@@ -159,8 +146,8 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
 
             return buffer;
         } else {
-            console.error("Strict AI run failed:", run.last_error);
-            throw new Error(`Strict AI run failed: ${run.last_error?.message || "Unknown error"}`);
+            console.error("Absolute AI run failed:", run.last_error);
+            throw new Error(`Absolute AI run failed: ${run.last_error?.message || "Unknown error"}`);
         }
     } catch (error) {
         console.error(`Error in processStrictFile: `, error);
@@ -169,7 +156,7 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
 }
 
 /**
- * Remove header and footer from SINGLE PDF using OpenAI Assistants API with STRICT rules.
+ * Strict PDF Redactor - Phase Final Absolute Strategy (+20px fix).
  */
 exports.strictRemoveHeader = async (req, res) => {
     const { jobId } = req.query;
@@ -184,11 +171,10 @@ exports.strictRemoveHeader = async (req, res) => {
         return res.status(400).send("No files uploaded.");
     }
 
-    // STRICT rule: Single file only
     const file = files[0];
 
     try {
-        console.log(`[strictRemoveHeader] Starting job: ${jobId} for file: ${file.originalname}`);
+        console.log(`[strictRemoveHeader] Starting ABSOLUTE (+20px) job: ${jobId}`);
         if (jobId) jobManager.updateJob(jobId, 10, `Processing ${file.originalname}`);
 
         const processedBuffer = await processStrictFile(file, jobId, 10, 80);
@@ -199,7 +185,6 @@ exports.strictRemoveHeader = async (req, res) => {
         res.setHeader("Content-Disposition", `attachment; filename="processed_output.pdf"`);
         res.send(processedBuffer);
 
-        // Cleanup
         if (fs.existsSync(file.path)) {
             fs.unlinkSync(file.path);
         }
