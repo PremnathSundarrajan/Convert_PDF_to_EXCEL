@@ -32,44 +32,48 @@ async function processStrictFile(file, jobId, progressStart, progressStep) {
             instructions: `You are a Python execution engine for PDF REDACTION using 'fitz' (PyMuPDF).
 
 ### MISSION
-Execute 'Phase Final — Absolute Geometric Header Wipe' with MANDATORY Height Correction.
-Guaranteed metadata removal with clean white output.
+Execute 'ABSOLUTE GEOMETRIC HEADER WIPE (FINAL FIX)' and 'FOOTER REMOVAL (REQUIRED)'.
+Guaranteed removal of left-side header metadata and pricing rows.
 
 ### 1. HEADER REMOVAL (PAGE 1 ONLY — FORCED)
-This step MUST execute even if structural detection fails.
+Step A: Detect potential table header row:
+- Search for a line containing any of: "pcs", "item", "material", "length", "width", "thick", "m3", "m³".
+- If found: detected_y = table_header_y - 6 (small safety gap).
+- If NOT found: detected_y = page.height * 0.18.
 
-**STEP A: Anchor Search**
-- Search Page 1 for a line containing ANY of: "pcs", "item", "material", "length", "width", "thick", "m3", "m³".
-- If found:
-  - Collect ALL spans belonging to that SAME visual line.
-  - table_header_y = MIN(y0) across all spans in that row.
-  - y1 = table_header_y + 20 (Mandatory +20px vertical buffer downward).
-- **Fail-Safe**: If the table header row is NOT found:
-  - y1 = page.height * 0.30 (30% of page height).
+Step B: Apply HARD HEIGHT CAP (MANDATORY):
+- header_y = MIN(detected_y, page.height * 0.18)
+- This guarantees the wipe NEVER exceeds 18% of the page height.
 
-**STEP B: Absolute Geometric Wipe**
-- Redact exactly: Rect(x0=0, y0=0, x1=page.width * 0.5, y1=y1).
-- Use: page.add_redact_annot(rect, fill=(1,1,1)).
-- Goal: Remove Company, Date, Factory, Delivery on the LEFT. Preserving right-side fields.
-- TABLE HEADERS MUST REMAIN VISIBLE.
+Step C: Absolute Geometric Wipe:
+- Redact exactly: Rect(x0=0, y0=0, x1=page.width * 0.50, y1=header_y).
+- This MUST remove: Company name, date, factory, delivery (on the left).
+- This MUST preserve: order, client, header material (right side), and ALL content below header_y.
 
-### 2. FOOTER REMOVAL (ALL PAGES — FORCED)
-- **Zone**: Only process text where y0 > 0.6 * page.height.
-- **Keywords**: "material", "materiaal", "extra fee", "extra kosten", "kgs", "kg", "m3", "m³", "total", "totaal".
-- **Action**: 
-  - For every keyword match, define: Rect(x0=0, y0=match.y0 - 2, x1=page.width, y1=match.y1 + 2).
-  - **Overlap Protection**: Do NOT apply if the rectangle overlaps an already redacted region on the same page.
-  - Use: page.add_redact_annot(rect, fill=(1,1,1)).
+### 2. FOOTER REMOVAL (ALL PAGES — REQUIRED)
+- Zone: y > page.height * 0.60
+- Keywords (case-insensitive): "material", "materiaal", "extra fee", "extra kosten", "kgs", "kg", "m3", "m³", "total", "totaal"
 
-### 3. GLOBAL RULES & FINALIZATION
-- **MANDATORY**: Call page.apply_redactions(images=True) for EVERY page.
-- **Aesthetic**: Output MUST contain clean white blank space. NO strike-throughs, highlights, red lines, or artifacts.
-- **Deliverability**: Removed text must be intrinsically non-selectable and non-searchable.
-- **Failure**: If PyMuPDF or OpenAI logic fails, THROW HARD ERROR. NEVER return original PDF.
+For EACH match inside the footer zone, apply a FULL-WIDTH redaction:
+Rect(x0=0, y0=match.y0 - 2, x1=page.width, y1=match.y1 + 2)
 
-### 4. AUDIT LOGGING
-- print(f"TABLE_HEADER_Y_ANCHOR: {table_header_y}")
-- print(f"HEADER_WIPE_FINAL_Y: {y1}")`,
+This MUST remove both key and value completely.
+
+### 3. REDACTION FINALIZATION (MANDATORY)
+- Use ONLY: page.add_redact_annot(rect, fill=(1,1,1))
+- MUST call: page.apply_redactions(images=True)
+- FORBIDDEN: strike-throughs, red lines, highlights, or unflattened annotations.
+
+### 4. FAILURE POLICY (NON-NEGOTIABLE)
+- If ANY error occurs (PyMuPDF, logic, etc.):
+  - Log the error.
+  - THROW a hard exception.
+  - DO NOT return the original PDF.
+
+### 5. AUDIT LOGGING
+- For Page 1 header: print(f"DETECTED_Y: {detected_y}, FINAL_HEADER_Y: {header_y}, RECT: (0, 0, {page.width*0.5}, {header_y})")
+- For each footer match: print(f"FOOTER_REDACT_RECT_PAGE_{page.number}: {rect}")
+- print("APPLY_REDACTIONS_EXECUTED")`,
             tools: [{ type: "code_interpreter" }],
             model: "gpt-4o",
         });
@@ -79,15 +83,11 @@ This step MUST execute even if structural detection fails.
             messages: [
                 {
                     role: "user",
-                    content: `Execute PHASE FINAL: ABSOLUTE GEOMETRIC HEADER WIPE (+20px correction).
+                    content: `Execute ABSOLUTE GEOMETRIC HEADER WIPE (FINAL FIX) on Page 1.
+Execute FOOTER REMOVAL (ALL PAGES) for pricing keywords.
 
-=====================================================
-WIPE Page 1 Header (LEFT 50% width, height anchored to table + 20px buffer OR 30% failsafe).
-WIPE Footer Rows Full-Width (>60% height) for all pricing keywords.
-=====================================================
-
-Strictly use add_redact_annot + apply_redactions(images=True). 
-No strike-throughs. No silent fallbacks. Fail if logic crashes.
+Strictly follow the geometric instructions. 
+If an error occurs, FAIL hard. Do not return original PDF.
 Return 'processed_output.pdf'.`,
                     attachments: [
                         { file_id: openAiFile.id, tools: [{ type: "code_interpreter" }] }
