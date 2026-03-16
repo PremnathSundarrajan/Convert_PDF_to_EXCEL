@@ -11,6 +11,7 @@ const convertEuro = require("./controller/convertEuro");
 const removeHeader = require("./controller/removeHeader");
 const strictRemoveHeader = require("./controller/strictRemoveHeader");
 const cleanOcr = require("./controller/cleanOcr");
+const generateCrateSummary = require("./controller/generateCrateSummary");
 const jobManager = require("./utils/jobManager");
 
 app.use(
@@ -63,6 +64,7 @@ app.post("/convert-euro", upload.array("pdfs"), convertEuro.convertEuro);
 app.post("/remove-header", upload.array("pdfs"), removeHeader.removeHeader);
 app.post("/strict-remove-header", upload.array("pdfs"), strictRemoveHeader.strictRemoveHeader);
 app.post("/clean-ocr", upload.array("pdfs"), cleanOcr.cleanOcr);
+app.post("/generate-crate-summary", upload.single("excel"), generateCrateSummary.generateCrateSummary);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
