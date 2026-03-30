@@ -33,28 +33,165 @@ const generateCrateSummary = async (req, res) => {
 
         if (jobId) jobManager.updateJob(jobId, 30, "Excel parsed, sending to AI...");
 
-        // 2. Prepare data for OpenAI
-        const excelDataString = JSON.stringify(rows);
+        // 2. Backend Grouping Logic
+        // Identify header row dynamically
+        let headerRowIndex = -1;
+        let headers = [];
+        for (let i = 0; i < Math.min(20, rows.length); i++) {
+            const row = rows[i];
+            if (!row || !Array.isArray(row)) continue;
+            const containsOrder = row.some(cell => typeof cell === 'string' && cell.toLowerCase().includes('order'));
+            const containsMaterial = row.some(cell => typeof cell === 'string' && cell.toLowerCase().includes('material'));
+            if (containsOrder && containsMaterial) {
+                headerRowIndex = i;
+                headers = row.map(h => (h || '').toString().trim().toLowerCase());
+                break;
+            }
+        }
 
-        const systemPrompt = `You are an expert data processor for logistics.
-Extract "Packing ID" from the title row (e.g. "PACKING LIST FOR RCGG-1684" -> "RCGG-1684").
-Process the table data to group by "Crates".
-For each crate:
-- Merge rows with same "Order No" and "Material" by summing "Nos" (quantity).
-- Determine "Client": if all share one client, use that; otherwise "Various".
-- Calculate total quantity.
-Return structured JSON only.`;
+        if (headerRowIndex === -1) {
+            throw new Error("Could not find table headers (Order No, Material) in the Excel file.");
+        }
+
+        let colCrates = -1, colOrderNo = -1, colMaterial = -1, colNos = -1, colClient = -1;
+        headers.forEach((h, idx) => {
+            if (h.includes('crate')) colCrates = idx;
+            else if (h.includes('order')) colOrderNo = idx;
+            else if (h.includes('material')) colMaterial = idx;
+            else if (h.includes('nos') || h === 'qty' || h.includes('quantity') || h.includes('pcs') || h.includes('pieces')) colNos = idx;
+            else if (h.includes('client') || h.includes('buyer') || h.includes('customer')) colClient = idx;
+        });
+
+        const parsedData = [];
+        let currentCrate = null;
+        for (let i = headerRowIndex + 1; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length === 0) continue;
+            
+            const rowCrate = (colCrates !== -1 && row[colCrates] != null && String(row[colCrates]).trim() !== '') ? row[colCrates] : currentCrate;
+            currentCrate = rowCrate;
+
+            const orderNo = colOrderNo !== -1 ? row[colOrderNo] : null;
+            const material = colMaterial !== -1 ? row[colMaterial] : null;
+            const nos = colNos !== -1 ? row[colNos] : null;
+            const client = colClient !== -1 ? row[colClient] : null;
+
+            // Only process rows that have actual item data
+            if (orderNo || material) {
+                parsedData.push({
+                    crate: rowCrate,
+                    orderNo: orderNo,
+                    material: material,
+                    nos: nos,
+                    client: client
+                });
+            }
+        }
+
+        let originalSum = 0;
+        const grouped = {};
+        const crateClients = {};
+
+        parsedData.forEach(row => {
+            const rawCrate = String(row.crate || 'Unknown').trim();
+            // Try to extract strict number if it says "Crate 1"
+            const crateMatch = rawCrate.match(/[0-9]+/);
+            // Default to numeric crate index if extracted, otherwise keeping raw string
+            const crateKey = crateMatch ? crateMatch[0] : rawCrate;
+
+            const orderNo = String(row.orderNo || '').trim();
+            const material = String(row.material || '').trim();
+            const key = `${crateKey}_${orderNo}_${material}`;
+
+            if (!grouped[key]) {
+                grouped[key] = {
+                    crate_no: crateKey,
+                    order_no: orderNo,
+                    material: material,
+                    qty: 0
+                };
+            }
+
+            const num = Number(row.nos || 0);
+            const validNum = isNaN(num) ? 0 : num;
+            grouped[key].qty += validNum;
+            originalSum += validNum;
+
+            if (!crateClients[crateKey]) crateClients[crateKey] = new Set();
+            if (row.client && String(row.client).trim() !== '') {
+                crateClients[crateKey].add(String(row.client).trim());
+            }
+        });
+
+        const getClient = (crateKey) => {
+            const clients = Array.from(crateClients[crateKey] || []);
+            if (clients.length === 0) return 'Various';
+            if (clients.length === 1) return clients[0];
+            return 'Various';
+        };
+
+        const cratesMap = {};
+        let groupedSum = 0;
+        Object.values(grouped).forEach(item => {
+            if (!cratesMap[item.crate_no]) {
+                cratesMap[item.crate_no] = {
+                    crate_no: item.crate_no,
+                    client: getClient(item.crate_no),
+                    items: [],
+                    total: 0
+                };
+            }
+            cratesMap[item.crate_no].items.push({
+                order_no: item.order_no,
+                material: item.material,
+                qty: item.qty
+            });
+            cratesMap[item.crate_no].total += item.qty;
+            groupedSum += item.qty;
+        });
+
+        if (originalSum !== groupedSum) {
+            throw new Error(`INTERNAL ERROR: Backend Data Loss. original_sum (${originalSum}) != grouped_sum (${groupedSum})`);
+        }
+
+        const backendCalculatedCrates = Object.values(cratesMap).map(c => ({
+            crate_no: Number(c.crate_no) || c.crate_no,
+            client: c.client,
+            items: c.items,
+            total: c.total
+        }));
+
+        const excelDataString = JSON.stringify({
+            title_rows_for_packing_id: rows.slice(0, Math.max(headerRowIndex, 5)),
+            backend_calculated_crates: backendCalculatedCrates
+        }, null, 2);
+
+        const systemPrompt = `You are a formatting agent.
+Your job is ONLY to extract the Packing ID and format the provided backend data strictly into JSON.`;
 
         const userPrompt = `
-Process this Packing List data:
+Here is the raw title rows and the explicitly grouped backend data:
 
 ${excelDataString}
 
-Rules:
-1. Extract Packing ID (text after 'FOR' in title row).
-2. Group by "Crates" column.
-3. Merge duplicate Order No + Material inside each crate, sum quantities.
-4. If "Crates" contains values like "Crate 1", "Crate 2", extract the number part.
+================================================
+NEW RULE — BACKEND IS SOURCE OF TRUTH
+================================================
+
+1. OPENAI MUST NOT CALCULATE
+You are ONLY allowed to:
+• format data
+• structure crate output
+• Extract Packing ID from the title_rows (e.g. text after 'FOR' in "PACKING LIST FOR RCGG-1684").
+
+You MUST NOT:
+❌ sum values
+❌ count rows
+❌ modify qty
+
+2. FINAL OUTPUT RULE
+Do NOT change qty or total values. They are already calculated.
+Use the EXACT "backend_calculated_crates" provided in the JSON payload. Do not change structure.
 
 Expected JSON format:
 {
@@ -64,12 +201,14 @@ Expected JSON format:
       "crate_no": 1,
       "client": "Alpha",
       "items": [
-        { "order_no": "01-135", "material": "Black Premium", "qty": 2 }
+        { "order_no": "01-135", "material": "Black Premium", "qty": 4 }
       ],
-      "total": 2
+      "total": 4
     }
   ]
 }
+
+Treat this as a strict 1-to-1 data mapping task for the crates. Do not omit any items or crates.
 `;
 
         const completion = await openai.chat.completions.create({
@@ -83,6 +222,18 @@ Expected JSON format:
         });
 
         const aiResponse = JSON.parse(completion.choices[0].message.content);
+
+        // 6. VALIDATION (MANDATORY)
+        let sum_excel = 0;
+        aiResponse.crates.forEach(c => {
+            if (c.items) {
+                c.items.forEach(i => sum_excel += (Number(i.qty) || 0));
+            }
+        });
+
+        if (groupedSum !== sum_excel) {
+            throw new Error(`CRITICAL ERROR: OpenAI altered quantities! sum_backend (${groupedSum}) != sum_excel (${sum_excel})`);
+        }
         
         if (jobId) jobManager.updateJob(jobId, 80, "AI processing complete, building output...");
 
