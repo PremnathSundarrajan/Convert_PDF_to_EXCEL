@@ -19,6 +19,13 @@
  * The topmost matched item drives the top of a full-width white rect that
  * reaches the page bottom.
  *
+ * ─── BATCH MODE ──────────────────────────────────────────────────────────────
+ * All uploaded files are processed independently (no shared coordinates).
+ * Files are processed with concurrency=2 to limit memory pressure.
+ * Per-file errors are isolated — one bad file does not abort the batch.
+ * Results are packaged into a single ZIP: cleaned_pdfs_<timestamp>.zip
+ * Each entry inside: <original_basename>_cleaned.pdf
+ *
  * ─── SAFETY ─────────────────────────────────────────────────────────────────
  * If an anchor cannot be found the section is skipped with a console.warn.
  * Drawings, "Finish: …" notes, and table content are never touched.
@@ -28,7 +35,6 @@
  *             1 unit = 1/4.5 PDF-points  ⟹  ptY = unit_y * (72/4.5) = unit_y * 16
  *             Actually pdf2json stores in "user units" where 1 unit ≈ 1pt but
  *             accessed as x/y in the Texts[].x / .y fields.
- *             Better: use page.Height (in units) and item.y (in units).
  *             Convert to PDF-points: ptVal = unitVal * (pageHeightPt / page.Height)
  *             — see extractItems() for exact conversion.
  * pdf-lib   : origin = BOTTOM-LEFT, y increases upward.
@@ -39,6 +45,7 @@
 
 const fs          = require("fs");
 const path        = require("path");
+const archiver    = require("archiver");
 const PDF2JSON    = require("pdf2json");
 const { PDFDocument, rgb } = require("pdf-lib");
 const jobManager  = require("../utils/jobManager");
@@ -75,17 +82,13 @@ const FOOTER_BUFFER_PT  = 4;
 /** Footer candidates must sit below this fraction of page height (top-origin). */
 const FOOTER_ZONE_TOP_FRACTION = 0.60;
 
+/** Max files processed in parallel (limits peak memory). */
+const CONCURRENCY = 2;
+
 // ─── pdf2json parser ──────────────────────────────────────────────────────────
 
 /**
  * Parse a PDF buffer with pdf2json and return the raw JSON data.
- * pdf2json coordinate system:
- *   • page.Width  / page.Height  in "units" (1 unit ≈ 4.5 PDF-points for A4, but
- *     the actual scale is: 1 unit = 1/4.5 of a PDF point at 72 dpi, so
- *     ptValue = unitValue * (72 / 4.5) = unitValue * 16  — BUT this only holds
- *     when the PDF is rendered at exactly 96 dpi internally.  The safest approach
- *     is to use the ratio: ptValue = unitValue * (pagePtHeight / page.Height).
- *   • Texts[i].x, .y  — in the same units, origin top-left, y increases down.
  */
 function parsePdf2Json(buffer) {
   return new Promise((resolve, reject) => {
@@ -240,7 +243,9 @@ function findFooterTopY(items, pagePtH) {
   return Math.max(...footerCandidates.map(it => it.ptY));
 }
 
-// ─── Core processing ──────────────────────────────────────────────────────────
+// ─── Core single-file processing ──────────────────────────────────────────────
+// THIS FUNCTION IS THE CANONICAL SINGLE-FILE REDACTION LOGIC.
+// Batch mode calls it per-file in a loop — never duplicated.
 
 async function processBuffer(inputBuffer) {
   // 1. Parse with pdf2json for text positions
@@ -320,7 +325,7 @@ async function processBuffer(inputBuffer) {
   return Buffer.from(cleanedBytes);
 }
 
-// ─── Express route handler ────────────────────────────────────────────────────
+// ─── Express route handler — BATCH MODE ──────────────────────────────────────
 
 exports.strictRemoveHeader = async (req, res) => {
   const { jobId } = req.query;
@@ -333,31 +338,84 @@ exports.strictRemoveHeader = async (req, res) => {
     return res.status(400).json({ error: "No files uploaded." });
   }
 
-  const file = files[0];
+  const total     = files.length;
+  const skipped   = [];   // { name, reason }
+  const results   = [];   // { originalName, cleanedBuffer }
 
-  try {
-    console.log(`[strictRemoveHeader] Job: ${jobId || "(none)"} | File: ${file.originalname}`);
-    if (jobId) jobManager.updateJob(jobId, 10, `Reading ${file.originalname}`);
+  console.log(`[strictRemoveHeader] Job: ${jobId || "(none)"} | Batch: ${total} file(s)`);
 
-    const inputBuffer = fs.readFileSync(file.path);
+  // ── Process files with limited concurrency ─────────────────────────────────
+  for (let i = 0; i < total; i += CONCURRENCY) {
+    const chunk = files.slice(i, i + CONCURRENCY);
 
-    if (jobId) jobManager.updateJob(jobId, 30, "Extracting text positions");
-    const cleanedBuffer = await processBuffer(inputBuffer);
+    await Promise.all(chunk.map(async (file) => {
+      const fileIndex  = files.indexOf(file) + 1;
+      const statusMsg  = `Cleaning file ${fileIndex} of ${total}: ${file.originalname}`;
 
-    if (jobId) jobManager.updateJob(jobId, 90, "Finalising PDF");
+      console.log(`[strictRemoveHeader] ${statusMsg}`);
+      if (jobId) {
+        // Progress: distribute 10–90 range across files
+        const pct = Math.round(10 + ((fileIndex - 1) / total) * 80);
+        jobManager.updateJob(jobId, pct, statusMsg);
+      }
 
-    const outName = `Cleaned_${path.basename(file.originalname, ".pdf")}.pdf`;
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${outName}"`);
-    res.send(cleanedBuffer);
-
-    if (jobId) jobManager.updateJob(jobId, 100, "Complete");
-
-    try { fs.unlinkSync(file.path); } catch (_) {}
-
-  } catch (error) {
-    console.error("[strictRemoveHeader] Error:", error);
-    if (jobId) jobManager.updateJob(jobId, 0, "Error: " + error.message);
-    res.status(500).json({ error: error.message });
+      try {
+        const inputBuffer   = fs.readFileSync(file.path);
+        const cleanedBuffer = await processBuffer(inputBuffer);
+        results.push({ originalName: file.originalname, cleanedBuffer });
+      } catch (err) {
+        console.warn(`[strictRemoveHeader] SKIPPED ${file.originalname}:`, err.message);
+        skipped.push({ name: file.originalname, reason: err.message });
+      } finally {
+        // Always clean up temp file
+        try { fs.unlinkSync(file.path); } catch (_) {}
+      }
+    }));
   }
+
+  // ── Nothing succeeded ──────────────────────────────────────────────────────
+  if (results.length === 0) {
+    const summary = `All ${total} file(s) failed. Issues: ${skipped.map(s => s.name).join(", ")}`;
+    if (jobId) jobManager.updateJob(jobId, 0, summary);
+    return res.status(400).json({
+      error: summary,
+      skipped,
+    });
+  }
+
+  // ── Package into ZIP ───────────────────────────────────────────────────────
+  if (jobId) jobManager.updateJob(jobId, 92, "Packaging ZIP…");
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const zipName   = `cleaned_pdfs_${timestamp}.zip`;
+
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${zipName}"`);
+
+  const archive = archiver("zip", { zlib: { level: 6 } });
+
+  archive.on("error", (err) => {
+    console.error("[strictRemoveHeader] Archiver error:", err);
+    // Headers already sent; can't send a JSON error — just destroy
+    res.destroy(err);
+  });
+
+  archive.pipe(res);
+
+  for (const { originalName, cleanedBuffer } of results) {
+    const baseName  = path.basename(originalName, ".pdf");
+    const entryName = `${baseName}_cleaned.pdf`;
+    archive.append(cleanedBuffer, { name: entryName });
+  }
+
+  await archive.finalize();
+
+  // ── Final job status ───────────────────────────────────────────────────────
+  const skippedNote = skipped.length > 0
+    ? ` — ${skipped.length} skipped (${skipped.map(s => s.name).join(", ")})`
+    : "";
+  const finalStatus = `Cleaned ${results.length} of ${total} file(s)${skippedNote} — ZIP ready`;
+
+  console.log(`[strictRemoveHeader] ${finalStatus}`);
+  if (jobId) jobManager.updateJob(jobId, 100, finalStatus);
 };
