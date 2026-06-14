@@ -1,197 +1,363 @@
-const OpenAI = require("openai");
-const fs = require("fs");
-const path = require("path");
-const jobManager = require("../utils/jobManager");
+/**
+ * strictRemoveHeader.js
+ *
+ * Strict PDF cleaner — LOCAL, GENERIC, COORDINATE-BASED.
+ * Stack: pdf2json (text + coords, CJS) + pdf-lib (draw white rects, CJS).
+ *
+ * ─── HEADER REMOVAL (Page 1 only) ───────────────────────────────────────────
+ * Finds the table-header row by detecting the horizontal band where the column
+ * labels { pcs, item, material, length, width, thick, m³/m3 } all appear
+ * together.  Everything ABOVE that row is covered with a full-width white
+ * rectangle.  Works regardless of how many key-value info rows precede it.
+ *
+ * ─── FOOTER REMOVAL (Every page) ────────────────────────────────────────────
+ * Searches the bottom 40 % of each page for the footer key labels
+ * { total, material, extra fee, kgs, kg, m³, m3 }.
+ * To avoid false-positives with the "material" column in the table, matches
+ * must appear below 60 % of page height AND be accompanied by a € symbol or
+ * numeric value on the same horizontal band (or there must be ≥2 matches).
+ * The topmost matched item drives the top of a full-width white rect that
+ * reaches the page bottom.
+ *
+ * ─── SAFETY ─────────────────────────────────────────────────────────────────
+ * If an anchor cannot be found the section is skipped with a console.warn.
+ * Drawings, "Finish: …" notes, and table content are never touched.
+ *
+ * ─── COORDINATE SYSTEMS ─────────────────────────────────────────────────────
+ * pdf2json  : origin = TOP-LEFT, y increases downward.
+ *             1 unit = 1/4.5 PDF-points  ⟹  ptY = unit_y * (72/4.5) = unit_y * 16
+ *             Actually pdf2json stores in "user units" where 1 unit ≈ 1pt but
+ *             accessed as x/y in the Texts[].x / .y fields.
+ *             Better: use page.Height (in units) and item.y (in units).
+ *             Convert to PDF-points: ptVal = unitVal * (pageHeightPt / page.Height)
+ *             — see extractItems() for exact conversion.
+ * pdf-lib   : origin = BOTTOM-LEFT, y increases upward.
+ *             pt = pt  (standard PDF points, same as the PDF spec).
+ */
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+"use strict";
+
+const fs          = require("fs");
+const path        = require("path");
+const PDF2JSON    = require("pdf2json");
+const { PDFDocument, rgb } = require("pdf-lib");
+const jobManager  = require("../utils/jobManager");
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/** The column labels that ALL must appear on the same horizontal band to
+ *  identify the table-header row.  m3/m³ is checked separately. */
+const HEADER_LABELS = ["pcs", "item", "material", "length", "width", "thick"];
+const M3_VARIANTS   = ["m³", "m3"];
+
+/** Footer key labels (case-insensitive prefix).
+ *  Trailing colons and spaces are stripped before matching. */
+const FOOTER_LABELS = [
+  "total",
+  "material",
+  "extra fee",
+  "extra kosten",
+  "kgs",
+  "kg",
+  "m³",
+  "m3",
+];
+
+/** Items within this many PDF-points vertically are considered "on the same line". */
+const BAND_TOLERANCE_PT = 10;
+
+/** Buffer added above the detected table-header row so the row itself is not clipped. */
+const HEADER_BUFFER_PT  = 3;
+
+/** Buffer added above the topmost footer label — leaves a clean edge. */
+const FOOTER_BUFFER_PT  = 4;
+
+/** Footer candidates must sit below this fraction of page height (top-origin). */
+const FOOTER_ZONE_TOP_FRACTION = 0.60;
+
+// ─── pdf2json parser ──────────────────────────────────────────────────────────
 
 /**
- * PHASE FINAL — ABSOLUTE GEOMETRIC HEADER WIPE.
- * ZERO-TOLERANCE SPECIFICATION WITH +20PX HEIGHT FIX.
+ * Parse a PDF buffer with pdf2json and return the raw JSON data.
+ * pdf2json coordinate system:
+ *   • page.Width  / page.Height  in "units" (1 unit ≈ 4.5 PDF-points for A4, but
+ *     the actual scale is: 1 unit = 1/4.5 of a PDF point at 72 dpi, so
+ *     ptValue = unitValue * (72 / 4.5) = unitValue * 16  — BUT this only holds
+ *     when the PDF is rendered at exactly 96 dpi internally.  The safest approach
+ *     is to use the ratio: ptValue = unitValue * (pagePtHeight / page.Height).
+ *   • Texts[i].x, .y  — in the same units, origin top-left, y increases down.
  */
-async function processStrictFile(file, jobId, progressStart, progressStep) {
-    try {
-        // 1. Upload file to OpenAI
-        const fileContent = fs.createReadStream(file.path);
-        const openAiFile = await openai.files.create({
-            file: fileContent,
-            purpose: "assistants",
-        });
+function parsePdf2Json(buffer) {
+  return new Promise((resolve, reject) => {
+    const parser = new PDF2JSON();
+    parser.on("pdfParser_dataError", (err) => reject(err.parserError || err));
+    parser.on("pdfParser_dataReady", (data) => resolve(data));
+    parser.parseBuffer(buffer);
+  });
+}
 
-        if (jobId) {
-            jobManager.updateJob(
-                jobId,
-                Math.round(progressStart + progressStep * 0.3),
-                `Executing Absolute Geometic Redaction (+20px Fix): ${file.originalname}`
-            );
-        }
+// ─── Item extraction ──────────────────────────────────────────────────────────
 
-        // 2. Create Assistant
-        const assistant = await openai.beta.assistants.create({
-            name: "Final Absolute PDF Redactor",
-            instructions: `You are a Python execution engine for PDF REDACTION using 'fitz' (PyMuPDF).
+/**
+ * Extract text items from one pdf2json page and convert coordinates to
+ * PDF-points with pdf-lib's origin (bottom-left).
+ *
+ * @param {object} p2jPage   - one element from pdfData.Pages[]
+ * @param {number} pagePtH   - page height in PDF-points (from pdf-lib)
+ * @param {number} pagePtW   - page width  in PDF-points (from pdf-lib)
+ * @returns {Array<{text, ptX, ptY, ptYBottom}>}
+ *   ptY       = TOP    of the text item in pdf-lib coords (origin bottom-left)
+ *   ptYBottom = BOTTOM of the text item in pdf-lib coords
+ */
+function extractItems(p2jPage, pagePtH, pagePtW) {
+  const unitH = p2jPage.Height; // page height in pdf2json units
+  const unitW = p2jPage.Width;  // page width  in pdf2json units
 
-### MISSION
-Execute 'ABSOLUTE GEOMETRIC HEADER WIPE (FINAL FIX)' and 'FOOTER REMOVAL (REQUIRED)'.
-Guaranteed removal of left-side header metadata and pricing rows.
+  // Scale factor: pdf2json units → PDF points
+  const scaleY = pagePtH / unitH;
+  const scaleX = pagePtW / unitW;
 
-### 1. HEADER REMOVAL (PAGE 1 ONLY — FORCED)
-Step A: Detect potential table header row:
-- Search for a line containing any of: "pcs", "item", "material", "length", "width", "thick", "m3", "m³".
-- If found: detected_y = table_header_y - 6 (small safety gap).
-- If NOT found: detected_y = page.height * 0.18.
+  const items = [];
 
-Step B: Apply HARD HEIGHT CAP (MANDATORY):
-- header_y = MIN(detected_y, page.height * 0.18)
-- This guarantees the wipe NEVER exceeds 18% of the page height.
+  for (const t of (p2jPage.Texts || [])) {
+    // Decode the text
+    const raw = t.R
+      ? t.R.map(r => decodeURIComponent(r.T)).join("")
+      : "";
+    const text = raw.trim();
+    if (!text) continue;
 
-Step C: Absolute Geometric Wipe:
-- Redact exactly: Rect(x0=0, y0=0, x1=page.width * 0.50, y1=header_y).
-- This MUST remove: Company name, date, factory, delivery (on the left).
-- This MUST preserve: order, client, header material (right side), and ALL content below header_y.
+    // pdf2json: x, y = top-left of the item in units (top-left origin)
+    const unitX = t.x;
+    const unitY = t.y;
 
-### 2. FOOTER REMOVAL (ALL PAGES — REQUIRED)
-- Zone: y > page.height * 0.60
-- Keywords (case-insensitive): "material", "materiaal", "extra fee", "extra kosten", "kgs", "kg", "m3", "m³", "total", "totaal"
+    // Approximate height of the text in units (use font size if available)
+    const fontSize = t.R && t.R[0] && t.R[0].TS ? t.R[0].TS[1] : 10;
+    // pdf2json TS[1] is font size in points already (not units)
+    const itemHeightPt = fontSize;
 
-For EACH match inside the footer zone, apply a FULL-WIDTH redaction:
-Rect(x0=0, y0=match.y0 - 2, x1=page.width, y1=match.y1 + 2)
+    // Convert x, y to PDF-points in pdf-lib's coordinate system
+    const ptX       = unitX * scaleX;
+    const ptTop     = pagePtH - (unitY * scaleY);         // top edge (pdf-lib)
+    const ptBottom  = ptTop - itemHeightPt;               // bottom edge (pdf-lib)
 
-This MUST remove both key and value completely.
+    items.push({ text, ptX, ptY: ptTop, ptYBottom: ptBottom });
+  }
 
-### 3. REDACTION FINALIZATION (MANDATORY)
-- Use ONLY: page.add_redact_annot(rect, fill=(1,1,1))
-- MUST call: page.apply_redactions(images=True)
-- FORBIDDEN: strike-throughs, red lines, highlights, or unflattened annotations.
+  return items;
+}
 
-### 4. FAILURE POLICY (NON-NEGOTIABLE)
-- If ANY error occurs (PyMuPDF, logic, etc.):
-  - Log the error.
-  - THROW a hard exception.
-  - DO NOT return the original PDF.
+// ─── Detection helpers ────────────────────────────────────────────────────────
 
-### 5. AUDIT LOGGING
-- For Page 1 header: print(f"DETECTED_Y: {detected_y}, FINAL_HEADER_Y: {header_y}, RECT: (0, 0, {page.width*0.5}, {header_y})")
-- For each footer match: print(f"FOOTER_REDACT_RECT_PAGE_{page.number}: {rect}")
-- print("APPLY_REDACTIONS_EXECUTED")`,
-            tools: [{ type: "code_interpreter" }],
-            model: "gpt-4o",
-        });
+/**
+ * Find the TOP y-coordinate (pdf-lib, bottom-left origin) of the table-header row.
+ *
+ * The table-header row is the unique horizontal band where ALL of HEADER_LABELS
+ * plus at least one M3_VARIANTS token appear within BAND_TOLERANCE_PT of each other.
+ *
+ * Returns null if not found.
+ */
+function findTableHeaderTopY(items) {
+  // Candidates: items whose normalised text matches a header label or m3 variant
+  const candidates = items.filter(it => {
+    const t = it.text.toLowerCase().replace(/\s+/g, "");
+    return (
+      HEADER_LABELS.some(lbl => t === lbl) ||
+      M3_VARIANTS.some(v   => t === v)
+    );
+  });
 
-        // 3. Create Thread
-        const thread = await openai.beta.threads.create({
-            messages: [
-                {
-                    role: "user",
-                    content: `Execute ABSOLUTE GEOMETRIC HEADER WIPE (FINAL FIX) on Page 1.
-Execute FOOTER REMOVAL (ALL PAGES) for pricing keywords.
+  if (candidates.length < 3) return null; // not enough to form a row
 
-Strictly follow the geometric instructions. 
-If an error occurs, FAIL hard. Do not return original PDF.
-Return 'processed_output.pdf'.`,
-                    attachments: [
-                        { file_id: openAiFile.id, tools: [{ type: "code_interpreter" }] }
-                    ],
-                },
-            ],
-        });
-
-        if (jobId) {
-            jobManager.updateJob(
-                jobId,
-                Math.round(progressStart + progressStep * 0.6),
-                `Applying Absolute Redactions (+20px Fix) ${file.originalname}`
-            );
-        }
-
-        // 4. Run Assistant
-        let run = await openai.beta.threads.runs.createAndPoll(thread.id, {
-            assistant_id: assistant.id,
-        });
-
-        if (run.status === "completed") {
-            const messages = await openai.beta.threads.messages.list(thread.id);
-            const lastMessage = messages.data[0];
-
-            let outputFileId = null;
-            for (const content of lastMessage.content) {
-                if (content.type === 'text' && content.text.annotations) {
-                    for (const annotation of content.text.annotations) {
-                        if (annotation.type === 'file_path') {
-                            outputFileId = annotation.file_path.file_id;
-                        }
-                    }
-                }
-                if (content.type === 'image_file' && content.image_file) {
-                    outputFileId = content.image_file.file_id;
-                }
-            }
-
-            if (!outputFileId) {
-                throw new Error("Assistant did not produce an output file.");
-            }
-
-            const fileData = await openai.files.content(outputFileId);
-            const buffer = Buffer.from(await fileData.arrayBuffer());
-
-            // Cleanup
-            try {
-                await Promise.all([
-                    openai.beta.assistants.delete(assistant.id),
-                    openai.files.delete(openAiFile.id)
-                ]);
-            } catch (e) {
-                console.warn("Cleanup warning:", e.message);
-            }
-
-            return buffer;
-        } else {
-            console.error("Absolute AI run failed:", run.last_error);
-            throw new Error(`Absolute AI run failed: ${run.last_error?.message || "Unknown error"}`);
-        }
-    } catch (error) {
-        console.error(`Error in processStrictFile: `, error);
-        throw error;
+  // Group into horizontal bands by ptY proximity
+  const bands = [];
+  for (const c of candidates) {
+    let placed = false;
+    for (const band of bands) {
+      if (Math.abs(band[0].ptY - c.ptY) <= BAND_TOLERANCE_PT) {
+        band.push(c);
+        placed = true;
+        break;
+      }
     }
+    if (!placed) bands.push([c]);
+  }
+
+  // Find the first band satisfying the full signature
+  for (const band of bands) {
+    const texts = new Set(band.map(it => it.text.toLowerCase().replace(/\s+/g, "")));
+    const hasAll = HEADER_LABELS.every(lbl => texts.has(lbl));
+    const hasM3  = M3_VARIANTS.some(v => texts.has(v));
+    if (hasAll && hasM3) {
+      // Return the highest ptY (topmost in pdf-lib coords = largest y value)
+      return Math.max(...band.map(it => it.ptY));
+    }
+  }
+
+  return null;
 }
 
 /**
- * Strict PDF Redactor - Phase Final Absolute Strategy (+20px fix).
+ * Find the TOP y-coordinate (pdf-lib) of the topmost footer label on a page.
+ *
+ * Rules:
+ *  1. Item must be in the bottom 40 % of the page
+ *     (ptY < pagePtH * (1 - FOOTER_ZONE_TOP_FRACTION)).
+ *  2. Its text must match a FOOTER_LABELS entry (stripped of trailing colon/space).
+ *  3. To avoid false-positives with a single "material" in the table:
+ *     require ≥2 footer matches, OR at least one adjacent item on the same
+ *     horizontal band that contains a € or is purely numeric.
+ *
+ * Returns null if no footer found.
  */
+function findFooterTopY(items, pagePtH) {
+  // In pdf-lib coords: footer zone = y < pagePtH * (1 - 0.60) = pagePtH * 0.40
+  const zoneBoundaryY = pagePtH * (1 - FOOTER_ZONE_TOP_FRACTION);
+
+  const footerCandidates = items.filter(it => {
+    if (it.ptY > zoneBoundaryY) return false; // item is above footer zone
+    const t = it.text.toLowerCase().replace(/[:\s]+$/, "").trim();
+    return FOOTER_LABELS.some(lbl => t === lbl || t.startsWith(lbl));
+  });
+
+  if (footerCandidates.length === 0) return null;
+
+  // Anti-false-positive: if only one match, require an adjacent € or numeric
+  if (footerCandidates.length === 1) {
+    const fi = footerCandidates[0];
+    const hasNeighbour = items.some(it =>
+      Math.abs(it.ptY - fi.ptY) <= BAND_TOLERANCE_PT &&
+      it !== fi &&
+      (/€/.test(it.text) || /^\d[\d.,]*$/.test(it.text))
+    );
+    if (!hasNeighbour) {
+      console.warn("[strictRemoveHeader] Single footer candidate with no adjacent € or numeric — skipping footer.");
+      return null;
+    }
+  }
+
+  // Return the topmost (largest ptY in pdf-lib coords) among footer candidates
+  return Math.max(...footerCandidates.map(it => it.ptY));
+}
+
+// ─── Core processing ──────────────────────────────────────────────────────────
+
+async function processBuffer(inputBuffer) {
+  // 1. Parse with pdf2json for text positions
+  const pdfData = await parsePdf2Json(inputBuffer);
+  const p2jPages = pdfData.Pages || [];
+
+  // 2. Load with pdf-lib for drawing
+  const pdfDoc = await PDFDocument.load(inputBuffer, { ignoreEncryption: true });
+  const pages  = pdfDoc.getPages();
+
+  for (let i = 0; i < pages.length; i++) {
+    const page        = pages[i];
+    const { width: pagePtW, height: pagePtH } = page.getSize();
+    const p2jPage     = p2jPages[i];
+
+    if (!p2jPage) {
+      console.warn(`[strictRemoveHeader] No pdf2json data for page ${i + 1} — skipping.`);
+      continue;
+    }
+
+    const items = extractItems(p2jPage, pagePtH, pagePtW);
+
+    // ── Page 1: Header removal ──────────────────────────────────────────────
+    if (i === 0) {
+      const tableHeaderTopY = findTableHeaderTopY(items);
+
+      if (tableHeaderTopY === null) {
+        console.warn("[strictRemoveHeader] Page 1: Table header row NOT found — skipping header redaction.");
+      } else {
+        // White rect from (tableHeaderTopY - buffer) up to the page top.
+        // pdf-lib drawRectangle: y = bottom-left corner of the rect.
+        const rectBottomY = tableHeaderTopY - HEADER_BUFFER_PT;
+        const rectHeight  = pagePtH - rectBottomY; // reaches page top
+
+        console.log(
+          `[strictRemoveHeader] Page 1 header: tableHeaderTopY=${tableHeaderTopY.toFixed(1)} pt, ` +
+          `rect=[y=${rectBottomY.toFixed(1)}, h=${rectHeight.toFixed(1)}]`
+        );
+
+        page.drawRectangle({
+          x      : 0,
+          y      : rectBottomY,
+          width  : pagePtW,
+          height : rectHeight,
+          color  : rgb(1, 1, 1),
+          opacity: 1,
+        });
+      }
+    }
+
+    // ── All pages: Footer removal ───────────────────────────────────────────
+    const footerTopY = findFooterTopY(items, pagePtH);
+
+    if (footerTopY === null) {
+      console.warn(`[strictRemoveHeader] Page ${i + 1}: Footer labels NOT found — skipping footer redaction.`);
+    } else {
+      // White rect from y=0 (page bottom) up to (footerTopY + buffer).
+      const rectHeight = footerTopY + FOOTER_BUFFER_PT; // bottom-left at y=0
+
+      console.log(
+        `[strictRemoveHeader] Page ${i + 1} footer: footerTopY=${footerTopY.toFixed(1)} pt, ` +
+        `rect=[y=0, h=${rectHeight.toFixed(1)}]`
+      );
+
+      page.drawRectangle({
+        x      : 0,
+        y      : 0,
+        width  : pagePtW,
+        height : rectHeight,
+        color  : rgb(1, 1, 1),
+        opacity: 1,
+      });
+    }
+  }
+
+  const cleanedBytes = await pdfDoc.save();
+  return Buffer.from(cleanedBytes);
+}
+
+// ─── Express route handler ────────────────────────────────────────────────────
+
 exports.strictRemoveHeader = async (req, res) => {
-    const { jobId } = req.query;
-    const files = req.files;
+  const { jobId } = req.query;
+  const files     = req.files;
 
-    if (jobId) {
-        jobManager.createJob(jobId);
-    }
+  if (jobId) jobManager.createJob(jobId);
 
-    if (!files || files.length === 0) {
-        if (jobId) jobManager.updateJob(jobId, 0, "No files uploaded");
-        return res.status(400).send("No files uploaded.");
-    }
+  if (!files || files.length === 0) {
+    if (jobId) jobManager.updateJob(jobId, 0, "No files uploaded");
+    return res.status(400).json({ error: "No files uploaded." });
+  }
 
-    const file = files[0];
+  const file = files[0];
 
-    try {
-        console.log(`[strictRemoveHeader] Starting ABSOLUTE (+20px) job: ${jobId}`);
-        if (jobId) jobManager.updateJob(jobId, 10, `Processing ${file.originalname}`);
+  try {
+    console.log(`[strictRemoveHeader] Job: ${jobId || "(none)"} | File: ${file.originalname}`);
+    if (jobId) jobManager.updateJob(jobId, 10, `Reading ${file.originalname}`);
 
-        const processedBuffer = await processStrictFile(file, jobId, 10, 80);
+    const inputBuffer = fs.readFileSync(file.path);
 
-        if (jobId) jobManager.updateJob(jobId, 100, "Complete");
+    if (jobId) jobManager.updateJob(jobId, 30, "Extracting text positions");
+    const cleanedBuffer = await processBuffer(inputBuffer);
 
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `attachment; filename="processed_output.pdf"`);
-        res.send(processedBuffer);
+    if (jobId) jobManager.updateJob(jobId, 90, "Finalising PDF");
 
-        if (fs.existsSync(file.path)) {
-            fs.unlinkSync(file.path);
-        }
+    const outName = `Cleaned_${path.basename(file.originalname, ".pdf")}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${outName}"`);
+    res.send(cleanedBuffer);
 
-    } catch (error) {
-        console.error("[strictRemoveHeader] Error:", error);
-        if (jobId) jobManager.updateJob(jobId, 0, "Error: " + error.message);
-        res.status(500).json({ error: error.message });
-    }
+    if (jobId) jobManager.updateJob(jobId, 100, "Complete");
+
+    try { fs.unlinkSync(file.path); } catch (_) {}
+
+  } catch (error) {
+    console.error("[strictRemoveHeader] Error:", error);
+    if (jobId) jobManager.updateJob(jobId, 0, "Error: " + error.message);
+    res.status(500).json({ error: error.message });
+  }
 };
