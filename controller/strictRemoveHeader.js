@@ -139,12 +139,12 @@ function extractItems(p2jPage, pagePtH, pagePtW) {
     // pdf2json TS[1] is font size in points already (not units)
     const itemHeightPt = fontSize;
 
-    // Convert x, y to PDF-points in pdf-lib's coordinate system
-    const ptX       = unitX * scaleX;
+    // Convert x, y to PDF-points in pdf-lib's coordinate system (with +4pt systematic offset correction)
+    const ptX       = (unitX * scaleX) + 4;
     const ptTop     = pagePtH - (unitY * scaleY);         // top edge (pdf-lib)
     const ptBottom  = ptTop - itemHeightPt;               // bottom edge (pdf-lib)
 
-    items.push({ text, ptX, ptY: ptTop, ptYBottom: ptBottom });
+    items.push({ text, ptX, ptY: ptTop, ptYBottom: ptBottom, w: t.w, fontSize });
   }
 
   return items;
@@ -268,31 +268,86 @@ async function processBuffer(inputBuffer) {
 
     const items = extractItems(p2jPage, pagePtH, pagePtW);
 
-    // ── Page 1: Header removal ──────────────────────────────────────────────
+    // ── Page 1: Selective Header Redaction ──────────────────────────────────
     if (i === 0) {
       const tableHeaderTopY = findTableHeaderTopY(items);
+      const headerThresholdY = tableHeaderTopY !== null ? tableHeaderTopY : (pagePtH * 0.5);
+      const headerItems = items.filter(it => it.ptY >= headerThresholdY);
 
-      if (tableHeaderTopY === null) {
-        console.warn("[strictRemoveHeader] Page 1: Table header row NOT found — skipping header redaction.");
-      } else {
-        // White rect from (tableHeaderTopY - buffer) up to the page top.
-        // pdf-lib drawRectangle: y = bottom-left corner of the rect.
-        const rectBottomY = tableHeaderTopY - HEADER_BUFFER_PT;
-        const rectHeight  = pagePtH - rectBottomY; // reaches page top
+      const DATE_PATTERN = /\b(?:\d{1,2}[-/.\s]\d{1,2}[-/.\s]\d{2,4}|\d{4}[-/.\s]\d{1,2}[-/.\s]\d{1,2})\b/;
+      const STOP_LABELS   = ["date", "client", "order", "factory", "delivery", "material", "rectification"];
 
-        console.log(
-          `[strictRemoveHeader] Page 1 header: tableHeaderTopY=${tableHeaderTopY.toFixed(1)} pt, ` +
-          `rect=[y=${rectBottomY.toFixed(1)}, h=${rectHeight.toFixed(1)}]`
-        );
+      /** Collect value-tokens to the right of a label on the same horizontal band.
+       *  Stops at a known header label or a horizontal gap >= 30 pt. */
+      function collectRightValues(label) {
+        const rightItems = items
+          .filter(it => Math.abs(it.ptY - label.ptY) <= BAND_TOLERANCE_PT && it.ptX > label.ptX)
+          .sort((a, b) => a.ptX - b.ptX);
+        const collected = [];
+        for (const item of rightItems) {
+          const norm = item.text.toLowerCase().replace(/[:\s]+$/, "").trim();
+          if (STOP_LABELS.includes(norm)) break;
+          if (collected.length > 0) {
+            const prev = collected[collected.length - 1];
+            if (item.ptX - (prev.ptX + prev.w) >= 30) break;
+          }
+          collected.push(item);
+        }
+        return collected;
+      }
 
+      /** Draw a white rectangle covering label + value items (label-only when valueItems=[]) */
+      function redactSpan(label, valueItems, desc) {
+        const allItems = [label, ...valueItems];
+        const minX = Math.min(...allItems.map(it => it.ptX));
+        const maxX = Math.max(...allItems.map(it => it.ptX + it.w));
+        const minY = Math.min(...allItems.map(it => it.ptYBottom));
+        const maxY = Math.max(...allItems.map(it => it.ptY));
+        const PAD  = 2;
+        console.log(`[strictRemoveHeader] Page 1: Redacting ${desc} "${allItems.map(it => it.text).join(" ")}"`)
         page.drawRectangle({
-          x      : 0,
-          y      : rectBottomY,
-          width  : pagePtW,
-          height : rectHeight,
-          color  : rgb(1, 1, 1),
+          x:      minX - PAD,
+          y:      minY - PAD,
+          width:  (maxX - minX) + 2 * PAD,
+          height: (maxY - minY) + 2 * PAD,
+          color:  rgb(1, 1, 1),
           opacity: 1,
         });
+      }
+
+      // 1. Date — redact label + value together; if no value, redact label alone
+      const dateLabel = headerItems.find(it => /\bdate\b/i.test(it.text));
+      if (!dateLabel) {
+        console.warn("[strictRemoveHeader] Page 1: 'date' label NOT found — skipping date redaction.");
+      } else {
+        redactSpan(dateLabel, collectRightValues(dateLabel), "date label+value");
+      }
+
+      // 2. Client — redact label + value together; if no value, redact label alone
+      const clientLabel = headerItems.find(it => /\bclient\b/i.test(it.text));
+      if (!clientLabel) {
+        console.warn("[strictRemoveHeader] Page 1: 'client' label NOT found — skipping client redaction.");
+      } else {
+        redactSpan(clientLabel, collectRightValues(clientLabel), "client label+value");
+      }
+
+      // 3. Rectification — silently skip if absent (expected on some PDFs only)
+      const rectLabel = headerItems.find(it => /\brectification\b/i.test(it.text));
+      if (rectLabel) {
+        // Collect tokens immediately to the right; stop after consuming the date token
+        const rectRight = items
+          .filter(it => Math.abs(it.ptY - rectLabel.ptY) <= BAND_TOLERANCE_PT && it.ptX > rectLabel.ptX)
+          .sort((a, b) => a.ptX - b.ptX);
+        const rectItems = [];
+        for (const item of rectRight) {
+          if (rectItems.length > 0) {
+            const prev = rectItems[rectItems.length - 1];
+            if (item.ptX - (prev.ptX + prev.w) >= 30) break;
+          }
+          rectItems.push(item);
+          if (DATE_PATTERN.test(item.text)) break; // stop after date token
+        }
+        redactSpan(rectLabel, rectItems, "rectification text");
       }
     }
 

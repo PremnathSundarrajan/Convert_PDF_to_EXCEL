@@ -42,7 +42,14 @@ function extractItems(p2jPage, pagePtH, pagePtW) {
     const fontSize     = t.R && t.R[0] && t.R[0].TS ? t.R[0].TS[1] : 10;
     const ptTop        = pagePtH - (t.y * scaleY);
     const ptBottom     = ptTop - fontSize;
-    items.push({ text, ptX: t.x * scaleX, ptY: ptTop, ptYBottom: ptBottom });
+    items.push({
+      text,
+      ptX: (t.x * scaleX) + 4,
+      ptY: ptTop,
+      ptYBottom: ptBottom,
+      w: t.w,
+      fontSize
+    });
   }
   return items;
 }
@@ -145,11 +152,74 @@ function findFooterTopY(items, pagePtH) {
     const items   = extractItems(p2jPage, H, W);
 
     if (i === 0) {
-      const hy = findTableHeaderTopY(items);
-      if (hy !== null) {
-        page.drawRectangle({ x:0, y: hy-HEADER_BUFFER_PT, width:W, height:H-hy+HEADER_BUFFER_PT, color:rgb(1,1,1), opacity:1 });
+      const tableHeaderTopY = findTableHeaderTopY(items);
+      const headerThresholdY = tableHeaderTopY !== null ? tableHeaderTopY : (H * 0.5);
+      const headerItems = items.filter(it => it.ptY >= headerThresholdY);
+
+      const DATE_PATTERN = /\b(?:\d{1,2}[-/.\s]\d{1,2}[-/.\s]\d{2,4}|\d{4}[-/.\s]\d{1,2}[-/.\s]\d{1,2})\b/;
+      const STOP_LABELS  = ["date", "client", "order", "factory", "delivery", "material", "rectification"];
+
+      function collectRightValues(label) {
+        const rightItems = items
+          .filter(it => Math.abs(it.ptY - label.ptY) <= BAND_TOLERANCE_PT && it.ptX > label.ptX)
+          .sort((a, b) => a.ptX - b.ptX);
+        const collected = [];
+        for (const item of rightItems) {
+          const norm = item.text.toLowerCase().replace(/[:\s]+$/, "").trim();
+          if (STOP_LABELS.includes(norm)) break;
+          if (collected.length > 0) {
+            const prev = collected[collected.length - 1];
+            if (item.ptX - (prev.ptX + prev.w) >= 30) break;
+          }
+          collected.push(item);
+        }
+        return collected;
+      }
+
+      function redactSpan(label, valueItems) {
+        const allItems = [label, ...valueItems];
+        const minX = Math.min(...allItems.map(it => it.ptX));
+        const maxX = Math.max(...allItems.map(it => it.ptX + it.w));
+        const minY = Math.min(...allItems.map(it => it.ptYBottom));
+        const maxY = Math.max(...allItems.map(it => it.ptY));
+        const PAD  = 2;
+        page.drawRectangle({
+          x:      minX - PAD,
+          y:      minY - PAD,
+          width:  (maxX - minX) + 2 * PAD,
+          height: (maxY - minY) + 2 * PAD,
+          color:  rgb(1, 1, 1),
+          opacity: 1,
+        });
+      }
+
+      // 1. Date — label + value (or label alone)
+      const dateLabel = headerItems.find(it => /\bdate\b/i.test(it.text));
+      if (dateLabel) redactSpan(dateLabel, collectRightValues(dateLabel));
+
+      // 2. Client — label + value (or label alone)
+      const clientLabel = headerItems.find(it => /\bclient\b/i.test(it.text));
+      if (clientLabel) redactSpan(clientLabel, collectRightValues(clientLabel));
+
+      // 3. Rectification — silently skip if absent
+      const rectLabel = headerItems.find(it => /\brectification\b/i.test(it.text));
+      if (rectLabel) {
+        const rectRight = items
+          .filter(it => Math.abs(it.ptY - rectLabel.ptY) <= BAND_TOLERANCE_PT && it.ptX > rectLabel.ptX)
+          .sort((a, b) => a.ptX - b.ptX);
+        const rectItems = [];
+        for (const item of rectRight) {
+          if (rectItems.length > 0) {
+            const prev = rectItems[rectItems.length - 1];
+            if (item.ptX - (prev.ptX + prev.w) >= 30) break;
+          }
+          rectItems.push(item);
+          if (DATE_PATTERN.test(item.text)) break;
+        }
+        redactSpan(rectLabel, rectItems);
       }
     }
+
     const fy = findFooterTopY(items, H);
     if (fy !== null) {
       page.drawRectangle({ x:0, y:0, width:W, height:fy+FOOTER_BUFFER_PT, color:rgb(1,1,1), opacity:1 });
