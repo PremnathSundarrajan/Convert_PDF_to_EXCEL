@@ -193,6 +193,15 @@ function findFooterTopY(items, pagePtH) {
         });
       }
 
+      // 0. Topmost Company Name / Title line (and single-character artifacts like 'J')
+      if (items.length > 0) {
+        const topmostY = Math.max(...items.map(it => it.ptY));
+        const topmostItems = items.filter(it => Math.abs(it.ptY - topmostY) <= 5);
+        if (topmostItems.length > 0) {
+          redactSpan(topmostItems[0], topmostItems.slice(1));
+        }
+      }
+
       // 1. Date — label + value (or label alone)
       const dateLabel = headerItems.find(it => /\bdate\b/i.test(it.text));
       if (dateLabel) redactSpan(dateLabel, collectRightValues(dateLabel));

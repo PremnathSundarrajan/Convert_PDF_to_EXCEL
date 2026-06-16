@@ -315,6 +315,15 @@ async function processBuffer(inputBuffer) {
         });
       }
 
+      // 0. Topmost Company Name / Title line (and single-character artifacts like 'J')
+      if (items.length > 0) {
+        const topmostY = Math.max(...items.map(it => it.ptY));
+        const topmostItems = items.filter(it => Math.abs(it.ptY - topmostY) <= 5);
+        if (topmostItems.length > 0) {
+          redactSpan(topmostItems[0], topmostItems.slice(1), "topmost company name line");
+        }
+      }
+
       // 1. Date — redact label + value together; if no value, redact label alone
       const dateLabel = headerItems.find(it => /\bdate\b/i.test(it.text));
       if (!dateLabel) {
